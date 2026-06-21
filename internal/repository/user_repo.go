@@ -1,0 +1,57 @@
+package repository
+
+import (
+	"context"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"bakeu/internal/models"
+)
+
+// UserRepo provides access to the users collection.
+type UserRepo struct {
+	users *mongo.Collection
+}
+
+func NewUserRepo(db *mongo.Database) *UserRepo {
+	return &UserRepo{users: db.Collection("users")}
+}
+
+// Create assigns a new ID and inserts the user.
+func (r *UserRepo) Create(ctx context.Context, u *models.User) error {
+	u.UID = bson.NewObjectID().Hex()
+	_, err := r.users.InsertOne(ctx, u)
+	return err
+}
+
+// Get loads a user by ID. Returns ErrNotFound if none exists.
+func (r *UserRepo) Get(ctx context.Context, uid string) (*models.User, error) {
+	var user models.User
+	if err := r.users.FindOne(ctx, bson.M{"_id": uid}).Decode(&user); err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetByEmail loads a user by email. Returns ErrNotFound if none exists.
+func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*models.User, error) {
+	var user models.User
+	if err := r.users.FindOne(ctx, bson.M{"email": email}).Decode(&user); err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// Upsert creates or fully replaces the user document at _id=u.UID.
+func (r *UserRepo) Upsert(ctx context.Context, u *models.User) error {
+	_, err := r.users.ReplaceOne(ctx, bson.M{"_id": u.UID}, u, options.Replace().SetUpsert(true))
+	return err
+}
