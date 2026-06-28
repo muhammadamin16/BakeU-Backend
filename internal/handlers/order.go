@@ -24,12 +24,14 @@ func NewOrderHandler(orders *repository.OrderRepo, carts *repository.CartRepo, p
 }
 
 type checkoutRequest struct {
-	DeliveryAddress string `json:"deliveryAddress"`
+	DeliveryAddress string            `json:"deliveryAddress"`
+	Items           []models.CartItem `json:"items"`
 }
 
-// Checkout handles POST /api/orders (customer only). It turns the caller's cart
-// into one order per seller, snapshotting product title/price, then clears the
-// cart. Returns the list of created orders.
+// Checkout handles POST /api/orders (customer only). The cart lives on the
+// client, so the request carries the items (final summed qty per product). It
+// turns them into one order per seller, snapshotting product title/price.
+// Returns the list of created orders.
 func (h *OrderHandler) Checkout(c *gin.Context) {
 	var req checkoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,23 +42,21 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "deliveryAddress is required"})
 		return
 	}
-
-	ctx := c.Request.Context()
-	uid := middleware.UID(c)
-
-	cart, err := h.carts.Get(ctx, uid)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load cart"})
-		return
-	}
-	if len(cart.Items) == 0 {
+	if len(req.Items) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cart is empty"})
 		return
 	}
 
+	ctx := c.Request.Context()
+	uid := middleware.UID(c)
+
 	// Group order items by seller, resolving each product to a price snapshot.
 	itemsBySeller := make(map[string][]models.OrderItem)
-	for _, item := range cart.Items {
+	for _, item := range req.Items {
+		if item.Qty <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid quantity for product: " + item.ProductID})
+			return
+		}
 		p, err := h.products.Get(ctx, item.ProductID)
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "product no longer available: " + item.ProductID})
@@ -101,11 +101,6 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		created = append(created, *order)
 	}
 
-	if err := h.carts.Clear(ctx, uid); err != nil {
-		// Orders are already placed; a stale cart is not worth failing the request.
-		c.JSON(http.StatusCreated, gin.H{"orders": created, "warning": "order placed but cart could not be cleared"})
-		return
-	}
 	c.JSON(http.StatusCreated, gin.H{"orders": created})
 }
 
