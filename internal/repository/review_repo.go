@@ -49,6 +49,10 @@ func (r *ReviewRepo) Create(ctx context.Context, productID string, rev *models.R
 			return nil, err
 		}
 
+		// Stamp the owning seller onto the review (copied from the product) so
+		// per-seller rating aggregation needs no product join.
+		rev.SellerID = p.SellerID
+
 		newCount := p.RatingCount + 1
 		newAvg := (p.RatingAvg*float64(p.RatingCount) + float64(rev.Rating)) / float64(newCount)
 
@@ -64,6 +68,33 @@ func (r *ReviewRepo) Create(ctx context.Context, productID string, rev *models.R
 		return "", err
 	}
 	return rev.ID, nil
+}
+
+// SellerRating returns the average rating and total review count across all of a
+// seller's products. Returns (0, 0, nil) when the seller has no reviews.
+func (r *ReviewRepo) SellerRating(ctx context.Context, sellerID string) (avg float64, count int, err error) {
+	cur, err := r.reviews.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"sellerId": sellerID}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   nil,
+			"avg":   bson.M{"$avg": "$rating"},
+			"count": bson.M{"$sum": 1},
+		}}},
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	var rows []struct {
+		Avg   float64 `bson:"avg"`
+		Count int     `bson:"count"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return 0, 0, err
+	}
+	if len(rows) == 0 {
+		return 0, 0, nil
+	}
+	return rows[0].Avg, rows[0].Count, nil
 }
 
 // ListByProduct returns all reviews for a product.

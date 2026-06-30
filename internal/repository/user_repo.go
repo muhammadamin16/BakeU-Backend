@@ -38,6 +38,27 @@ func (r *UserRepo) Get(ctx context.Context, uid string) (*models.User, error) {
 	return &user, nil
 }
 
+// NamesByID returns a map of user ID to display name for the given IDs. Missing
+// users are simply absent from the map. An empty input yields an empty map.
+func (r *UserRepo) NamesByID(ctx context.Context, ids []string) (map[string]string, error) {
+	names := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return names, nil
+	}
+	cur, err := r.users.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	var users []models.User
+	if err := cur.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		names[u.UID] = u.Name
+	}
+	return names, nil
+}
+
 // GetByEmail loads a user by email. Returns ErrNotFound if none exists.
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User

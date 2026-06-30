@@ -5,6 +5,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"bakeu/internal/auth"
+	"bakeu/internal/cache"
 	"bakeu/internal/config"
 	"bakeu/internal/email"
 	"bakeu/internal/handlers"
@@ -60,6 +61,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	cart := handlers.NewCartHandler(cartRepo)
 	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo)
 	review := handlers.NewReviewHandler(reviewRepo)
+	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
 
 	// Public routes (no auth)
 	public := r.Group("/api")
@@ -113,6 +115,8 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	sellerJSON.Use(middleware.BodyLimit(jsonBodyLimit))
 	{
 		sellerJSON.GET("/market/mine", market.Mine)
+
+		sellerJSON.GET("/seller/dashboard", dashboard.Dashboard)
 
 		sellerJSON.POST("/products", product.Create)
 		sellerJSON.PUT("/products/:id", product.Update)

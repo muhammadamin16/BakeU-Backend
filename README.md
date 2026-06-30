@@ -96,3 +96,24 @@ curl -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
 | PATCH | `/api/orders/:id/status` | seller | update order status |
 | GET | `/api/products/:id/reviews` | — | list reviews |
 | POST | `/api/products/:id/reviews` | customer | add a review |
+| GET | `/api/seller/dashboard` | seller | analytics dashboard (see below) |
+
+### Seller dashboard
+
+`GET /api/seller/dashboard?period=week&month=February`
+
+Returns everything a seller's analytics screen displays, aggregated server-side. The
+seller is taken from the JWT (never a query param). `period` defaults to `week`; `month`
+(name or number) is optional and only affects the monthly summary, defaulting to the
+current month. Day buckets use Asia/Tashkent (UTC+5).
+
+- **revenue** — `delivered`-only total over the last 7 days, a 7-point daily chart
+  (missing days backfilled to 0), and `percentChange` vs the prior 7 days (`null` when
+  the prior week had no revenue).
+- **activeOrders** — count of orders still needing action (`pending` / `preparing` /
+  `out_for_delivery`) with a per-status breakdown and a 7-point daily chart. Always live
+  (uncached); the rest is cached for a few minutes.
+- **rating** — average review rating and review count for the seller.
+- **products** — number of products the seller lists.
+- **monthly** — for the selected month: delivered order count, total revenue, average
+  order value, and top customers.

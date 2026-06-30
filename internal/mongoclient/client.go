@@ -61,11 +61,14 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	if _, err := db.Collection("orders").Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "customerId", Value: 1}}},
 		{Keys: bson.D{{Key: "sellerId", Value: 1}}},
+		// Every seller-dashboard query is "this seller's orders in a date range".
+		{Keys: bson.D{{Key: "sellerId", Value: 1}, {Key: "createdAt", Value: 1}}},
 	}); err != nil {
 		return err
 	}
-	if _, err := db.Collection("reviews").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "productId", Value: 1}},
+	if _, err := db.Collection("reviews").Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "productId", Value: 1}}},
+		{Keys: bson.D{{Key: "sellerId", Value: 1}}},
 	}); err != nil {
 		return err
 	}

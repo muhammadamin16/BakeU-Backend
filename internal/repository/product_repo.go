@@ -96,6 +96,11 @@ func (r *ProductRepo) List(ctx context.Context, category, sellerID, search strin
 	return products, nil
 }
 
+// CountBySeller returns the number of products listed by a seller.
+func (r *ProductRepo) CountBySeller(ctx context.Context, sellerID string) (int64, error) {
+	return r.products.CountDocuments(ctx, bson.M{"sellerId": sellerID})
+}
+
 // contains reports whether s is present in xs.
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
