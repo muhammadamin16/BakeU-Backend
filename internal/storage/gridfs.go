@@ -35,6 +35,22 @@ func (s *Store) Upload(ctx context.Context, filename, contentType string, r io.R
 	return id.Hex(), nil
 }
 
+// Delete removes the file with the given hex ID from GridFS. Returns
+// ErrNotFound for an unknown or malformed ID.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return ErrNotFound
+	}
+	if err := s.bucket.Delete(ctx, oid); err != nil {
+		if errors.Is(err, mongo.ErrFileNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 // Open returns the stored content type and a reader for the file with the given
 // hex ID. The caller must close the returned stream. Returns ErrNotFound for an
 // unknown or malformed ID.

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -103,15 +104,21 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, p)
 }
 
-// Delete handles DELETE /api/products/:id (seller only, owner only).
+// Delete handles DELETE /api/products/:id (seller only, owner only). The
+// product's stored images are removed with it so GridFS does not accumulate
+// orphans.
 func (h *ProductHandler) Delete(c *gin.Context) {
 	p, ok := h.loadOwned(c)
 	if !ok {
 		return
 	}
-	if err := h.products.Delete(c.Request.Context(), p.ID); err != nil {
+	ctx := c.Request.Context()
+	if err := h.products.Delete(ctx, p.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete product"})
 		return
+	}
+	for _, u := range p.ImageURLs {
+		deleteImageByURL(ctx, h.store, u)
 	}
 	c.Status(http.StatusNoContent)
 }
@@ -145,9 +152,12 @@ func (h *ProductHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, products)
 }
 
-// GetOne handles GET /api/products/:id (public).
+// GetOne handles GET /api/products/:id (public). Like List, it only exposes
+// products whose bakery is approved — a direct fetch by ID must not leak more
+// than the listing does.
 func (h *ProductHandler) GetOne(c *gin.Context) {
-	p, err := h.products.Get(c.Request.Context(), c.Param("id"))
+	ctx := c.Request.Context()
+	p, err := h.products.Get(ctx, c.Param("id"))
 	if errors.Is(err, repository.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
 		return
@@ -156,8 +166,21 @@ func (h *ProductHandler) GetOne(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load product"})
 		return
 	}
+	approved, err := h.markets.IsApprovedSeller(ctx, p.SellerID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load product"})
+		return
+	}
+	if !approved {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		return
+	}
 	c.JSON(http.StatusOK, p)
 }
+
+// maxProductImages caps how many images one product may accumulate, bounding
+// per-product GridFS usage.
+const maxProductImages = 5
 
 // UploadImage handles POST /api/products/:id/image (seller only, owner only, approved market).
 func (h *ProductHandler) UploadImage(c *gin.Context) {
@@ -168,14 +191,21 @@ func (h *ProductHandler) UploadImage(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if len(p.ImageURLs) >= maxProductImages {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("a product can have at most %d images", maxProductImages)})
+		return
+	}
 
 	url, ok := uploadImageFile(c, h.store, "image")
 	if !ok {
 		return
 	}
 
+	ctx := c.Request.Context()
 	p.ImageURLs = append(p.ImageURLs, url)
-	if err := h.products.SetImageURLs(c.Request.Context(), p.ID, p.ImageURLs); err != nil {
+	if err := h.products.SetImageURLs(ctx, p.ID, p.ImageURLs); err != nil {
+		// The URL was never persisted, so the stored file would be orphaned.
+		deleteImageByURL(ctx, h.store, url)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image url"})
 		return
 	}

@@ -37,6 +37,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	_ = r.SetTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"})
 
 	r.GET("/healthz", handlers.Health)
+	r.GET("/readyz", handlers.NewHealthHandler(db.Client()).Ready)
 
 	jwtm := auth.NewManager(cfg.JWTSecret)
 	loginGuard := auth.NewLoginGuard()
@@ -59,8 +60,8 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		cfg.AdminEmails, cfg.AppBaseURL, cfg.MarketReviewSecret)
 	image := handlers.NewImageHandler(imageStore)
 	cart := handlers.NewCartHandler(cartRepo)
-	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo)
-	review := handlers.NewReviewHandler(reviewRepo)
+	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo)
+	review := handlers.NewReviewHandler(reviewRepo, orderRepo)
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
 
 	// Public routes (no auth)

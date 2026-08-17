@@ -10,6 +10,9 @@ import (
 	"bakeu/internal/repository"
 )
 
+// maxCartItems caps the number of distinct products in one cart.
+const maxCartItems = 100
+
 // CartHandler serves the customer's shopping cart.
 type CartHandler struct {
 	carts *repository.CartRepo
@@ -58,6 +61,12 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		}
 	}
 	if !found {
+		// Bound the cart document: repeated adds of distinct products must not
+		// grow it toward Mongo's document size limit.
+		if len(cart.Items) >= maxCartItems {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cart is full"})
+			return
+		}
 		cart.Items = append(cart.Items, models.CartItem{ProductID: req.ProductID, Qty: req.Qty})
 	}
 

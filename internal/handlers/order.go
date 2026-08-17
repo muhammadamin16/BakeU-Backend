@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -12,15 +13,21 @@ import (
 	"bakeu/internal/repository"
 )
 
+// maxItemQty caps the quantity of a single order line; there is no stock
+// tracking, so this is the only bound on absurd orders.
+const maxItemQty = 1000
+
 // OrderHandler serves checkout, order listing and seller status updates.
 type OrderHandler struct {
 	orders   *repository.OrderRepo
 	carts    *repository.CartRepo
 	products *repository.ProductRepo
+	markets  *repository.MarketRepo
 }
 
-func NewOrderHandler(orders *repository.OrderRepo, carts *repository.CartRepo, products *repository.ProductRepo) *OrderHandler {
-	return &OrderHandler{orders: orders, carts: carts, products: products}
+func NewOrderHandler(orders *repository.OrderRepo, carts *repository.CartRepo,
+	products *repository.ProductRepo, markets *repository.MarketRepo) *OrderHandler {
+	return &OrderHandler{orders: orders, carts: carts, products: products, markets: markets}
 }
 
 type checkoutRequest struct {
@@ -46,6 +53,11 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cart is empty"})
 		return
 	}
+	// Each item costs a product lookup, so bound the list (mirrors maxCartItems).
+	if len(req.Items) > maxCartItems {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "too many items in one order"})
+		return
+	}
 
 	ctx := c.Request.Context()
 	uid := middleware.UID(c)
@@ -53,7 +65,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 	// Group order items by seller, resolving each product to a price snapshot.
 	itemsBySeller := make(map[string][]models.OrderItem)
 	for _, item := range req.Items {
-		if item.Qty <= 0 {
+		if item.Qty <= 0 || item.Qty > maxItemQty {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid quantity for product: " + item.ProductID})
 			return
 		}
@@ -78,14 +90,28 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		})
 	}
 
+	// A product only stays purchasable while its bakery is approved; listings
+	// hide unapproved markets, but checkout must enforce it too.
+	for sellerID := range itemsBySeller {
+		approved, err := h.markets.IsApprovedSeller(ctx, sellerID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check seller"})
+			return
+		}
+		if !approved {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "one of the bakeries is no longer available"})
+			return
+		}
+	}
+
 	now := time.Now().UTC()
-	created := make([]models.Order, 0, len(itemsBySeller))
+	orders := make([]*models.Order, 0, len(itemsBySeller))
 	for sellerID, items := range itemsBySeller {
 		var total float64
 		for _, it := range items {
 			total += it.Price * float64(it.Qty)
 		}
-		order := &models.Order{
+		orders = append(orders, &models.Order{
 			CustomerID:      uid,
 			SellerID:        sellerID,
 			Items:           items,
@@ -93,14 +119,27 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			Status:          models.OrderPending,
 			DeliveryAddress: req.DeliveryAddress,
 			CreatedAt:       now,
-		}
-		if _, err := h.orders.Create(ctx, order); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create order"})
-			return
-		}
-		created = append(created, *order)
+		})
 	}
 
+	// All orders are created in one transaction: a multi-seller checkout either
+	// fully succeeds or fails without leaving partial orders for a retry to
+	// duplicate.
+	if err := h.orders.CreateAll(ctx, orders); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create order"})
+		return
+	}
+
+	// The purchase went through; the server-side cart copy is now stale.
+	// Best-effort: a failure here must not fail the checkout.
+	if err := h.carts.Clear(ctx, uid); err != nil {
+		log.Printf("[order] clear cart for %s: %v", uid, err)
+	}
+
+	created := make([]models.Order, 0, len(orders))
+	for _, o := range orders {
+		created = append(created, *o)
+	}
 	c.JSON(http.StatusCreated, gin.H{"orders": created})
 }
 
@@ -155,6 +194,12 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	}
 	if order.SellerID != middleware.UID(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you do not own this order"})
+		return
+	}
+	if !models.CanTransition(order.Status, req.Status) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "cannot change status from '" + string(order.Status) + "' to '" + string(req.Status) + "'",
+		})
 		return
 	}
 

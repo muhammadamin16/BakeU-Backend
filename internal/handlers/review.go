@@ -15,10 +15,11 @@ import (
 // ReviewHandler serves product reviews.
 type ReviewHandler struct {
 	reviews *repository.ReviewRepo
+	orders  *repository.OrderRepo
 }
 
-func NewReviewHandler(reviews *repository.ReviewRepo) *ReviewHandler {
-	return &ReviewHandler{reviews: reviews}
+func NewReviewHandler(reviews *repository.ReviewRepo, orders *repository.OrderRepo) *ReviewHandler {
+	return &ReviewHandler{reviews: reviews, orders: orders}
 }
 
 // Create handles POST /api/products/:id/reviews (customer only).
@@ -38,16 +39,35 @@ func (h *ReviewHandler) Create(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
+	uid := middleware.UID(c)
+
+	// Only verified buyers may review: the customer must have a delivered order
+	// containing this product.
+	bought, err := h.orders.HasDeliveredProduct(ctx, uid, productID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify purchase"})
+		return
+	}
+	if !bought {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you can only review products you have purchased"})
+		return
+	}
+
 	rev := models.Review{
-		CustomerID: middleware.UID(c),
+		CustomerID: uid,
 		Rating:     req.Rating,
 		Comment:    req.Comment,
 		CreatedAt:  time.Now().UTC(),
 	}
 
-	_, err := h.reviews.Create(c.Request.Context(), productID, &rev)
+	_, err = h.reviews.Create(ctx, productID, &rev)
 	if errors.Is(err, repository.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		return
+	}
+	if errors.Is(err, repository.ErrDuplicate) {
+		c.JSON(http.StatusConflict, gin.H{"error": "you already reviewed this product"})
 		return
 	}
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -130,6 +131,8 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 			UpdatedAt:   now,
 		}
 		if err := h.markets.Create(ctx, m); err != nil {
+			// The logo was already stored but its URL was never persisted.
+			deleteImageByURL(ctx, h.store, logoURL)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create market"})
 			return
 		}
@@ -139,6 +142,7 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	}
 
 	// Resubmit: update the existing (pending or rejected) application.
+	oldLogoURL := existing.LogoURL
 	existing.Name = name
 	existing.Description = description
 	existing.Phone = phone
@@ -151,8 +155,14 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	existing.RejectionReason = ""
 	existing.UpdatedAt = now
 	if err := h.markets.Update(ctx, existing); err != nil {
+		deleteImageByURL(ctx, h.store, logoURL)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update market"})
 		return
+	}
+	// The resubmission replaced the logo; drop the old file so GridFS does not
+	// accumulate orphans.
+	if oldLogoURL != "" && oldLogoURL != logoURL {
+		deleteImageByURL(ctx, h.store, oldLogoURL)
 	}
 	h.notifyAdmins(ctx, existing)
 	c.JSON(http.StatusOK, existing)
@@ -160,17 +170,26 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 
 // ─────────────────────────── Admin review (email) ──────────────────────────
 
+// reviewLinkTTL is how long an emailed review link stays usable. A leaked old
+// email must not remain a working admin credential forever.
+const reviewLinkTTL = 14 * 24 * time.Hour
+
 // reviewToken is the HMAC that authorizes acting on a specific market via the
-// email links. It is unguessable without MarketReviewSecret.
-func (h *MarketHandler) reviewToken(marketID string) string {
+// email links, valid until the exp unix timestamp (which is signed into the
+// MAC, so it cannot be extended). It is unguessable without MarketReviewSecret.
+func (h *MarketHandler) reviewToken(marketID string, exp int64) string {
 	mac := hmac.New(sha256.New, []byte(h.reviewSecret))
-	mac.Write([]byte(marketID))
+	mac.Write([]byte(marketID + "|" + strconv.FormatInt(exp, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (h *MarketHandler) validToken(marketID, token string) bool {
-	want := h.reviewToken(marketID)
-	return hmac.Equal([]byte(want), []byte(token))
+func (h *MarketHandler) validToken(marketID, expStr, token string) bool {
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	want := h.reviewToken(marketID, exp)
+	return hmac.Equal([]byte(want), []byte(token)) && time.Now().Unix() < exp
 }
 
 // ReviewPage handles GET /api/market/review/:id?token=... — a small HTML page
@@ -178,7 +197,7 @@ func (h *MarketHandler) validToken(marketID, token string) bool {
 // Decline buttons. GET only displays, so email link prefetchers cannot mutate.
 func (h *MarketHandler) ReviewPage(c *gin.Context) {
 	id := c.Param("id")
-	if !h.validToken(id, c.Query("token")) {
+	if !h.validToken(id, c.Query("exp"), c.Query("token")) {
 		c.Data(http.StatusForbidden, "text/html; charset=utf-8", []byte("<h1>Invalid or expired link</h1>"))
 		return
 	}
@@ -201,6 +220,7 @@ func (h *MarketHandler) ReviewPage(c *gin.Context) {
 	if err := reviewPageTmpl.Execute(c.Writer, map[string]any{
 		"Market":  m,
 		"Token":   c.Query("token"),
+		"Exp":     c.Query("exp"),
 		"Action":  h.appBaseURL + "/api/market/review/" + m.ID,
 		"LogoURL": logoURL,
 		"Done":    m.Status != models.MarketPending,
@@ -214,7 +234,7 @@ func (h *MarketHandler) ReviewPage(c *gin.Context) {
 // link prefetchers. Reads form fields: token, decision (approve|decline), reason.
 func (h *MarketHandler) ReviewDecision(c *gin.Context) {
 	id := c.Param("id")
-	if !h.validToken(id, c.PostForm("token")) {
+	if !h.validToken(id, c.PostForm("exp"), c.PostForm("token")) {
 		c.Data(http.StatusForbidden, "text/html; charset=utf-8", []byte("<h1>Invalid or expired link</h1>"))
 		return
 	}
@@ -266,16 +286,16 @@ func (h *MarketHandler) notifyAdmins(ctx context.Context, m *models.Market) {
 	if len(h.adminEmails) == 0 {
 		return
 	}
-	reviewURL := fmt.Sprintf("%s/api/market/review/%s?token=%s", h.appBaseURL, m.ID, h.reviewToken(m.ID))
+	exp := time.Now().Add(reviewLinkTTL).Unix()
+	reviewURL := fmt.Sprintf("%s/api/market/review/%s?exp=%d&token=%s",
+		h.appBaseURL, m.ID, exp, h.reviewToken(m.ID, exp))
 	logoURL := ""
 	if m.LogoURL != "" {
 		logoURL = h.appBaseURL + m.LogoURL
 	}
 	body := adminEmailHTML(m, reviewURL, logoURL)
 	subject := "New bakery application: " + m.Name
-	if err := h.mailer.Send(ctx, h.adminEmails, subject, body); err != nil {
-		log.Printf("[market] notify admins: %v", err)
-	}
+	h.sendAsync(ctx, h.adminEmails, subject, body, "notify admins")
 }
 
 func (h *MarketHandler) notifySeller(ctx context.Context, m *models.Market) {
@@ -288,9 +308,19 @@ func (h *MarketHandler) notifySeller(ctx context.Context, m *models.Market) {
 	} else {
 		subject = "Update on your bakery application"
 	}
-	if err := h.mailer.Send(ctx, []string{m.Email}, subject, sellerEmailHTML(m)); err != nil {
-		log.Printf("[market] notify seller: %v", err)
-	}
+	h.sendAsync(ctx, []string{m.Email}, subject, sellerEmailHTML(m), "notify seller")
+}
+
+// sendAsync delivers the email in the background so a slow email API never
+// delays the HTTP response. The context is detached from the request (which
+// completes immediately) but keeps its values; failures are only logged.
+func (h *MarketHandler) sendAsync(ctx context.Context, to []string, subject, body, what string) {
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		if err := h.mailer.Send(ctx, to, subject, body); err != nil {
+			log.Printf("[market] %s: %v", what, err)
+		}
+	}()
 }
 
 func adminEmailHTML(m *models.Market, reviewURL, logoURL string) string {
@@ -356,6 +386,7 @@ var reviewPageTmpl = template.Must(template.New("review").Parse(`<!doctype html>
   {{else}}
   <form method="POST" action="{{.Action}}">
     <input type="hidden" name="token" value="{{.Token}}"/>
+    <input type="hidden" name="exp" value="{{.Exp}}"/>
     <textarea name="reason" placeholder="Reason (only needed if declining)" style="width:100%;box-sizing:border-box;height:70px;border-radius:10px;padding:10px;border:none;margin:12px 0"></textarea>
     <div style="display:flex;gap:12px">
       <button name="decision" value="approve" style="flex:1;background:#3DDC84;color:#06301a;border:none;padding:14px;border-radius:12px;font-weight:700;font-size:16px">Approve</button>

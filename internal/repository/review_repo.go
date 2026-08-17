@@ -27,7 +27,8 @@ func NewReviewRepo(db *mongo.Database) *ReviewRepo {
 
 // Create inserts a review and atomically updates the product's ratingAvg and
 // ratingCount in a single transaction. Returns ErrNotFound if the product does
-// not exist.
+// not exist, and ErrDuplicate if the customer has already reviewed it (unique
+// index on productId+customerId).
 func (r *ReviewRepo) Create(ctx context.Context, productID string, rev *models.Review) (string, error) {
 	rev.ID = bson.NewObjectID().Hex()
 	rev.ProductID = productID
@@ -57,6 +58,9 @@ func (r *ReviewRepo) Create(ctx context.Context, productID string, rev *models.R
 		newAvg := (p.RatingAvg*float64(p.RatingCount) + float64(rev.Rating)) / float64(newCount)
 
 		if _, err := r.reviews.InsertOne(ctx, rev); err != nil {
+			if isDuplicate(err) {
+				return nil, ErrDuplicate
+			}
 			return nil, err
 		}
 		_, err = r.products.UpdateOne(ctx, bson.M{"_id": productID}, bson.M{

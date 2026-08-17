@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"regexp"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -77,7 +78,9 @@ func (r *ProductRepo) List(ctx context.Context, category, sellerID, search strin
 		filter["sellerId"] = sellerID
 	}
 	if search != "" {
-		filter["title"] = bson.M{"$regex": search, "$options": "i"}
+		// QuoteMeta: the user input is a literal substring, not a pattern — a
+		// crafted regex could otherwise burn CPU or match unexpectedly.
+		filter["title"] = bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 	}
 
 	cur, err := r.products.Find(ctx, filter)

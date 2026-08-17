@@ -1,16 +1,23 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"bakeu/internal/storage"
 )
+
+// imageURLPrefix is the served path under which GridFS images are exposed.
+const imageURLPrefix = "/api/images/"
 
 // allowedImageTypes is the set of content types accepted for uploaded images.
 // Anything else (notably text/html) is rejected so a malicious upload cannot be
@@ -64,7 +71,20 @@ func uploadImageFile(c *gin.Context, store *storage.Store, field string) (string
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload image"})
 		return "", false
 	}
-	return "/api/images/" + fileID, true
+	return imageURLPrefix + fileID, true
+}
+
+// deleteImageByURL removes the GridFS file behind a served image URL.
+// Best-effort: failures are logged, never propagated, so a leaked file can't
+// fail the surrounding request (the file just stays orphaned).
+func deleteImageByURL(ctx context.Context, store *storage.Store, url string) {
+	id := strings.TrimPrefix(url, imageURLPrefix)
+	if id == "" || id == url {
+		return
+	}
+	if err := store.Delete(ctx, id); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		log.Printf("[images] delete %s: %v", id, err)
+	}
 }
 
 // safeImageContentType returns ct if it is an accepted image type, otherwise a

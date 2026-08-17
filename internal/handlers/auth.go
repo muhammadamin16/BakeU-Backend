@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"net/mail"
 	"strconv"
 	"strings"
 	"time"
@@ -60,21 +61,18 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "email and password are required"})
 		return
 	}
+	// Require a plain, parseable address (no display name) so approval emails
+	// can actually be delivered to it later.
+	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid email address"})
+		return
+	}
 	if len(req.Password) < minPasswordLen || len(req.Password) > maxPasswordLen {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be between 8 and 72 characters"})
 		return
 	}
 	if !req.Role.Valid() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "role must be 'seller' or 'customer'"})
-		return
-	}
-
-	ctx := c.Request.Context()
-	if _, err := h.users.GetByEmail(ctx, email); err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
-		return
-	} else if !errors.Is(err, repository.ErrNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check email"})
 		return
 	}
 
@@ -93,7 +91,13 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		Address:      req.Address,
 		CreatedAt:    time.Now().UTC(),
 	}
-	if err := h.users.Create(ctx, u); err != nil {
+	// The unique email index is the source of truth for duplicates: a pre-check
+	// would race with concurrent signups for the same address.
+	if err := h.users.Create(c.Request.Context(), u); err != nil {
+		if errors.Is(err, repository.ErrDuplicate) {
+			c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
 		return
 	}

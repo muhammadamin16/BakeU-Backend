@@ -39,20 +39,50 @@ type TopCustomer struct {
 
 // OrderRepo provides access to the orders collection.
 type OrderRepo struct {
+	client *mongo.Client
 	orders *mongo.Collection
 }
 
 func NewOrderRepo(db *mongo.Database) *OrderRepo {
-	return &OrderRepo{orders: db.Collection("orders")}
+	return &OrderRepo{client: db.Client(), orders: db.Collection("orders")}
 }
 
-// Create assigns a new ID, stores the order, and returns the ID.
-func (r *OrderRepo) Create(ctx context.Context, o *models.Order) (string, error) {
-	o.ID = bson.NewObjectID().Hex()
-	if _, err := r.orders.InsertOne(ctx, o); err != nil {
-		return "", err
+// CreateAll assigns IDs and inserts all orders in a single transaction, so a
+// multi-seller checkout either fully succeeds or leaves no orders behind.
+func (r *OrderRepo) CreateAll(ctx context.Context, orders []*models.Order) error {
+	session, err := r.client.StartSession()
+	if err != nil {
+		return err
 	}
-	return o.ID, nil
+	defer session.EndSession(ctx)
+
+	_, err = session.WithTransaction(ctx, func(ctx context.Context) (any, error) {
+		for _, o := range orders {
+			o.ID = bson.NewObjectID().Hex()
+			if _, err := r.orders.InsertOne(ctx, o); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+	return err
+}
+
+// HasDeliveredProduct reports whether the customer has at least one delivered
+// order containing the given product. Used to gate reviews to verified buyers.
+func (r *OrderRepo) HasDeliveredProduct(ctx context.Context, customerID, productID string) (bool, error) {
+	err := r.orders.FindOne(ctx, bson.M{
+		"customerId":      customerID,
+		"status":          models.OrderDelivered,
+		"items.productId": productID,
+	}).Err()
+	if isNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Get loads a single order. Returns ErrNotFound if it does not exist.

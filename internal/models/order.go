@@ -23,6 +23,25 @@ func ValidOrderStatus(s OrderStatus) bool {
 	}
 }
 
+// orderTransitions lists the statuses an order may move to from each status.
+// Delivered and cancelled are terminal: once reached, an order cannot change
+// (re-flagging delivered orders would also distort dashboard revenue).
+var orderTransitions = map[OrderStatus][]OrderStatus{
+	OrderPending:        {OrderPreparing, OrderCancelled},
+	OrderPreparing:      {OrderOutForDelivery, OrderDelivered, OrderCancelled},
+	OrderOutForDelivery: {OrderDelivered, OrderCancelled},
+}
+
+// CanTransition reports whether an order may move from one status to another.
+func CanTransition(from, to OrderStatus) bool {
+	for _, s := range orderTransitions[from] {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
+
 // OrderItem is a snapshot of a product at the time of ordering (title/price are
 // copied so later product edits don't change historical orders).
 type OrderItem struct {

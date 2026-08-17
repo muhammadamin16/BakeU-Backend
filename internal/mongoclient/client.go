@@ -69,6 +69,12 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	if _, err := db.Collection("reviews").Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "productId", Value: 1}}},
 		{Keys: bson.D{{Key: "sellerId", Value: 1}}},
+		// One review per customer per product. NOTE: creation fails (and the app
+		// won't start) if existing data already has duplicate pairs — dedupe first.
+		{
+			Keys:    bson.D{{Key: "productId", Value: 1}, {Key: "customerId", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
 	}); err != nil {
 		return err
 	}

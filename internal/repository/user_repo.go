@@ -19,10 +19,14 @@ func NewUserRepo(db *mongo.Database) *UserRepo {
 	return &UserRepo{users: db.Collection("users")}
 }
 
-// Create assigns a new ID and inserts the user.
+// Create assigns a new ID and inserts the user. Returns ErrDuplicate when the
+// email is already registered (unique index on email).
 func (r *UserRepo) Create(ctx context.Context, u *models.User) error {
 	u.UID = bson.NewObjectID().Hex()
 	_, err := r.users.InsertOne(ctx, u)
+	if isDuplicate(err) {
+		return ErrDuplicate
+	}
 	return err
 }
 
