@@ -23,10 +23,10 @@ func CORS(allowed []string) gin.HandlerFunc {
 		if TrustedBrowserOrigin(origin, allowed) {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-BakeU-Session")
+			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-BakeU-Session, Idempotency-Key")
 		} else {
 			c.Header("Access-Control-Allow-Origin", "*")
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == http.MethodOptions {

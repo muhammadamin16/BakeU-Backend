@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"bakeu/internal/config"
+	"bakeu/internal/repository"
 )
 
 // Clients bundles the live Mongo client and the working database handle. The
@@ -51,6 +52,10 @@ func New(ctx context.Context, cfg config.Config) (*Clients, error) {
 		}
 	}
 
+	if err := repository.NewTelegramRepo(db).EnsureIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("ensure Telegram indexes: %w", err)
+	}
 	return &Clients{Client: client, DB: db}, nil
 }
 

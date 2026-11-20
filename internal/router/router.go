@@ -65,10 +65,22 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		cfg.AdminEmails, cfg.AppBaseURL, cfg.MarketReviewSecret)
 	image := handlers.NewImageHandler(imageStore)
 	cart := handlers.NewCartHandler(cartRepo)
-	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo)
+	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo, userRepo)
 	review := handlers.NewReviewHandler(reviewRepo, orderRepo)
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
 
+	telegramRepo := repository.NewTelegramRepo(db)
+	telegram := handlers.NewTelegramHandler(telegramRepo, userRepo, orderRepo, marketRepo, productRepo, cfg.TelegramSiteURL)
+	bridge := r.Group("/api/integrations/telegram", handlers.TelegramServiceAuth(cfg.TelegramBridgeToken), middleware.BodyLimit(jsonBodyLimit))
+	bridge.GET("/me", telegram.Me)
+	bridge.POST("/link/challenges", telegram.StartLink)
+	bridge.GET("/shop", telegram.Shop)
+	bridge.GET("/shop/products", telegram.Products)
+	bridge.GET("/orders", telegram.Orders)
+	bridge.GET("/orders/:id", telegram.Order)
+	bridge.PATCH("/orders/:id/status", telegram.Transition)
+	bridge.POST("/notifications/claim", telegram.Claim)
+	bridge.POST("/notifications/:id/:action", telegram.LeaseAction)
 	// Public routes (no auth)
 	public := r.Group("/api")
 	public.Use(middleware.BodyLimit(jsonBodyLimit))
@@ -110,6 +122,9 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		authed.DELETE("/cart/items/:productId", cart.RemoveItem)
 
 		authed.GET("/orders", order.List)
+		authed.GET("/orders/capabilities", order.Capabilities)
+		authed.POST("/me/telegram/link/confirm", telegram.ConfirmLink)
+		authed.GET("/me/notifications", telegram.Inbox)
 	}
 
 	// Customer-only routes

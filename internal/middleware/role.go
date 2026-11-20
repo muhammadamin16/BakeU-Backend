@@ -28,7 +28,7 @@ func RequireRole(users *repository.UserRepo, role models.Role) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to load profile"})
 			return
 		}
-		if u.Role != role {
+		if !u.Active() || u.Role != role {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "requires " + string(role) + " role"})
 			return
 		}

@@ -7,10 +7,12 @@ import (
 
 // Config holds all runtime configuration, sourced from environment variables.
 type Config struct {
-	Port      string // HTTP port to listen on (Cloud Run sets PORT)
-	MongoURI  string // MongoDB connection string (Atlas or local)
-	MongoDB   string // database name
-	JWTSecret string // HMAC secret used to sign/verify auth tokens
+	TelegramBridgeToken string
+	TelegramSiteURL     string
+	Port                string // HTTP port to listen on (Cloud Run sets PORT)
+	MongoURI            string // MongoDB connection string (Atlas or local)
+	MongoDB             string // database name
+	JWTSecret           string // HMAC secret used to sign/verify auth tokens
 
 	RefreshSessions bool
 	BrowserOrigins  []string
@@ -26,12 +28,14 @@ type Config struct {
 // Load reads configuration from the environment, applying sensible defaults.
 func Load() Config {
 	return Config{
-		Port:            getEnv("PORT", "8080"),
-		MongoURI:        getEnv("MONGODB_URI", "mongodb://localhost:27017"),
-		MongoDB:         getEnv("MONGODB_DB", "bakeu"),
-		JWTSecret:       os.Getenv("JWT_SECRET"),
-		RefreshSessions: os.Getenv("AUTH_REFRESH_SESSIONS") == "true",
-		BrowserOrigins:  splitAndTrim(os.Getenv("AUTH_BROWSER_ORIGINS")),
+		TelegramBridgeToken: os.Getenv("TELEGRAM_BRIDGE_TOKEN"),
+		TelegramSiteURL:     getEnv("TELEGRAM_SITE_URL", "https://bakeu-website-production.up.railway.app"),
+		Port:                getEnv("PORT", "8080"),
+		MongoURI:            getEnv("MONGODB_URI", "mongodb://localhost:27017"),
+		MongoDB:             getEnv("MONGODB_DB", "bakeu"),
+		JWTSecret:           os.Getenv("JWT_SECRET"),
+		RefreshSessions:     os.Getenv("AUTH_REFRESH_SESSIONS") == "true",
+		BrowserOrigins:      splitAndTrim(os.Getenv("AUTH_BROWSER_ORIGINS")),
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		EmailFrom:          getEnv("EMAIL_FROM", "Bakeu <onboarding@resend.dev>"),
