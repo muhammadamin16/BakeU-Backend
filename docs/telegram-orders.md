@@ -62,3 +62,16 @@ The outbox is in `order_notifications`, in the same database. Unique event IDs d
 `go test ./...` passes with `BAKEU_TEST_MONGO_URI=mongodb://127.0.0.1:<disposable-port>/?replicaSet=rs0`. Integration tests refuse non-loopback URIs and use/drop only generated `bakeu_*_test_*` databases. They exercise actual Mongo transactions, three identities/two sellers, contact/password proof, binding conflicts/replay, authoritative prices/GPS/pickup, multi-seller checkout replay, stale/foreign/concurrent status writes, history after router recreation, durable notifications, lease loss/late ACK and compatibility with the earlier five-state history API.
 
 A separate headless Chromium run used real Go HTTP endpoints and a disposable MongoDB replica set: buyer/seller browser proof, two-shop checkout, seller website acceptance, buyer live progress, bot bridge reads, native location payload and worker receipt dedup all passed. Only Telegram delivery was simulated; no production bot messages or production DB operations were performed. Website/bot suite: 59 tests; existing Go shared-session suite: 3 tests; website build/scoped lint passed. Live Railway environment variables, domains and a real Telegram token must still be checked after deployment is explicitly authorized.
+# Verified phone identity
+
+Telegram confirmation now claims `users.verifiedPhoneE164` and `phoneVerifiedAt`
+in the same transaction as binding the authenticated UID and consuming its
+challenge. A partial unique index excludes unverified legacy profiles and
+prevents two UIDs from claiming one number. `users.phone` remains an editable
+contact; profile changes cannot change or replace the proven identity.
+
+An older binding without a matching verified identity must repeat the existing
+own-contact + account-password proof. Startup does not backfill phone ownership
+or merge accounts. A conflicting proof rolls back its user, binding and challenge
+changes together. Existing production data is never inferred or migrated.
+

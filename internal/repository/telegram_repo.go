@@ -32,6 +32,7 @@ func digest(value string) string {
 }
 
 type TelegramBinding struct {
+	VerifiedPhoneE164 string `bson:"verifiedPhoneE164,omitempty" json:"-"`
 	TelegramID  string    `bson:"_id" json:"telegramId"`
 	UserID      string    `bson:"userId" json:"-"`
 	ConfirmedAt time.Time `bson:"confirmedAt" json:"-"`
@@ -87,7 +88,15 @@ type TelegramRepo struct{ db *mongo.Database }
 
 func NewTelegramRepo(db *mongo.Database) *TelegramRepo { return &TelegramRepo{db: db} }
 func (r *TelegramRepo) EnsureIndexes(ctx context.Context) error {
-	_, err := r.db.Collection("telegram_bindings").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)})
+	// Additive: old accounts with no proof are excluded. Never infer ownership
+	// from the editable phone field or backfill it while starting the service.
+	_, err := r.db.Collection("users").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "verifiedPhoneE164", Value: 1}},
+		Options: options.Index().SetName("unique_verified_phone").SetUnique(true).
+			SetPartialFilterExpression(bson.M{"verifiedPhoneE164": bson.M{"$type": "string", "$gt": ""}}),
+	})
+	if err != nil { return err }
+	_, err = r.db.Collection("telegram_bindings").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)})
 	if err != nil {
 		return err
 	}
@@ -113,6 +122,9 @@ func (r *TelegramRepo) Identity(ctx context.Context, actor string) (*TelegramIde
 	}
 	if !u.Active() || b.ConfirmedAt.IsZero() {
 		return nil, ErrForbidden
+	}
+	if !u.PhoneVerified() || b.VerifiedPhoneE164 != u.VerifiedPhoneE164 {
+		return nil, nil // Pre-verification bindings require a fresh contact + password proof.
 	}
 	out := &TelegramIdentity{Linked: true, Confirmed: true, TelegramID: actor, BotStarted: b.BotStarted}
 	out.User.ID = u.UID
@@ -162,7 +174,10 @@ func (r *TelegramRepo) Confirm(ctx context.Context, token, uid string) error {
 		if e != nil {
 			return nil, e
 		}
-		phone, e := identity.NormalizePhone(u.Phone)
+		phone := u.VerifiedPhoneE164
+		if !u.PhoneVerified() {
+			phone, e = identity.NormalizePhone(u.Phone)
+		}
 		if e != nil || !u.Active() || phone != ch.Phone || u.Role != ch.Role {
 			return nil, ErrForbidden
 		}
@@ -172,9 +187,15 @@ func (r *TelegramRepo) Confirm(ctx context.Context, token, uid string) error {
 			}
 		}
 		// A write on the same user serializes confirmation with profile/freeze changes.
-		if _, e = r.db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid, "phone": u.Phone, "role": u.Role}, bson.M{"$set": bson.M{"telegramProofAt": time.Now().UTC()}}); e != nil {
+		now := time.Now().UTC()
+		verifiedAt := u.PhoneVerifiedAt
+		if !u.PhoneVerified() { verifiedAt = &now }
+		result, e := r.db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid, "phone": u.Phone, "role": u.Role}, bson.M{"$set": bson.M{"telegramProofAt": now, "verifiedPhoneE164": ch.Phone, "phoneVerifiedAt": verifiedAt}})
+		if isDuplicate(e) { return nil, ErrConflict }
+		if e != nil {
 			return nil, e
 		}
+		if result.MatchedCount != 1 { return nil, ErrConflict }
 
 		var previous TelegramBinding
 		e = r.db.Collection("telegram_bindings").FindOne(ctx, bson.M{"_id": ch.TelegramID}).Decode(&previous)
@@ -184,14 +205,14 @@ func (r *TelegramRepo) Confirm(ctx context.Context, token, uid string) error {
 		if e != nil && !isNotFound(e) {
 			return nil, e
 		}
-		_, e = r.db.Collection("telegram_bindings").UpdateOne(ctx, bson.M{"_id": ch.TelegramID}, bson.M{"$set": bson.M{"userId": uid, "confirmedAt": time.Now().UTC(), "botStarted": true, "blocked": false}}, options.UpdateOne().SetUpsert(true))
+		_, e = r.db.Collection("telegram_bindings").UpdateOne(ctx, bson.M{"_id": ch.TelegramID}, bson.M{"$set": bson.M{"userId": uid, "verifiedPhoneE164": ch.Phone, "confirmedAt": now, "botStarted": true, "blocked": false}}, options.UpdateOne().SetUpsert(true))
 		if isDuplicate(e) {
 			return nil, ErrConflict
 		}
 		if e != nil {
 			return nil, e
 		}
-		result, e := r.db.Collection("telegram_challenges").UpdateOne(ctx, bson.M{"_id": ch.ID, "used": false}, bson.M{"$set": bson.M{"used": true}})
+		result, e = r.db.Collection("telegram_challenges").UpdateOne(ctx, bson.M{"_id": ch.ID, "used": false}, bson.M{"$set": bson.M{"used": true}})
 		if e != nil {
 			return nil, e
 		}
