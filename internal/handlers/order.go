@@ -42,6 +42,7 @@ type deliveryRequest struct {
 	Comment         string              `json:"comment"`
 }
 type checkoutRequest struct {
+	CartRevision *string `json:"cartRevision,omitempty"`
 	deliveryRequest
 	Items      []models.CartItem          `json:"items"`
 	Deliveries map[string]deliveryRequest `json:"deliveries"`
@@ -263,7 +264,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "Получение указано для постороннего магазина."})
 		return
 	}
-	created, e := h.orders.CreateCommitted(ctx, u.UID, key, hash, orders)
+	created, e := h.orders.CreateCommitted(ctx, u.UID, key, hash, orders, req.CartRevision)
 	if e != nil {
 		orderError(c, e)
 		return
@@ -370,5 +371,5 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	c.JSON(200, changed)
 }
 func (h *OrderHandler) Capabilities(c *gin.Context) {
-	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true, "variantSnapshots": true})
+	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true, "variantSnapshots": true, "cartRevision": true})
 }

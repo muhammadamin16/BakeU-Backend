@@ -10,6 +10,7 @@ type CartItem struct {
 // Cart is a customer's shopping cart, stored in the carts collection with the
 // user ID as the document _id.
 type Cart struct {
-	UID   string     `bson:"_id" json:"uid"`
-	Items []CartItem `bson:"items" json:"items"`
+	Revision string     `bson:"revision,omitempty" json:"revision"`
+	UID      string     `bson:"_id" json:"uid"`
+	Items    []CartItem `bson:"items" json:"items"`
 }

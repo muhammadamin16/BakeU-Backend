@@ -58,7 +58,7 @@ func (r *OrderRepo) CreateAll(ctx context.Context, orders []*models.Order) error
 	if len(orders) == 0 {
 		return nil
 	}
-	_, err := r.CreateCommitted(ctx, orders[0].CustomerID, randomToken(), RequestHash(orders), orders)
+	_, err := r.CreateCommitted(ctx, orders[0].CustomerID, randomToken(), RequestHash(orders), orders, nil)
 	return err
 }
 

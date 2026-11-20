@@ -39,7 +39,7 @@ func (r *OrderRepo) priorOperation(ctx context.Context, id, hash string) ([]mode
 func (r *OrderRepo) ReplayCheckout(ctx context.Context, uid, key, hash string) ([]models.Order, error) {
 	return r.priorOperation(ctx, digest("checkout:"+uid+":"+key), hash)
 }
-func (r *OrderRepo) CreateCommitted(ctx context.Context, uid, key, hash string, orders []*models.Order) ([]models.Order, error) {
+func (r *OrderRepo) CreateCommitted(ctx context.Context, uid, key, hash string, orders []*models.Order, cartRevision *string) ([]models.Order, error) {
 	opID := digest("checkout:" + uid + ":" + key)
 	if out, e := r.priorOperation(ctx, opID, hash); e == nil {
 		return out, nil
@@ -68,6 +68,31 @@ func (r *OrderRepo) CreateCommitted(ctx context.Context, uid, key, hash string, 
 		} else if !errors.Is(e, ErrNotFound) {
 			return nil, e
 		}
+		cart, e := NewCartRepo(r.db).Get(ctx, uid)
+		if e != nil {
+			return nil, e
+		}
+		if cartRevision != nil && cart.Revision != *cartRevision {
+			return nil, ErrConflict
+		}
+		// Only clear the cart when every saved line matches the purchase. For
+		// legacy clients, preserve an unrelated cart instead of discarding it.
+		purchased := make(map[[2]string]int)
+		for _, order := range orders {
+			for _, item := range order.Items {
+				purchased[[2]string{item.ProductID, item.VariantID}] += item.Qty
+			}
+		}
+		coversCart := true
+		for _, item := range cart.Items {
+			if purchased[[2]string{item.ProductID, item.VariantID}] != item.Qty {
+				coversCart = false
+				break
+			}
+		}
+		if !coversCart && cartRevision != nil {
+			return nil, ErrConflict
+		}
 		out = []models.Order{}
 		for _, o := range orders {
 			if _, e := r.orders.InsertOne(ctx, o); e != nil {
@@ -78,10 +103,12 @@ func (r *OrderRepo) CreateCommitted(ctx context.Context, uid, key, hash string, 
 			}
 			out = append(out, *o)
 		}
-		if _, e := r.db.Collection("carts").DeleteOne(ctx, bson.M{"_id": uid}); e != nil {
-			return nil, e
+		if coversCart && (len(cart.Items) > 0 || cart.Revision != "") {
+			if _, e := r.db.Collection("carts").DeleteOne(ctx, bson.M{"_id": uid}); e != nil {
+				return nil, e
+			}
 		}
-		_, e := r.db.Collection("order_operations").InsertOne(ctx, orderOperation{ID: opID, Hash: hash, Orders: out, CreatedAt: time.Now().UTC()})
+		_, e = r.db.Collection("order_operations").InsertOne(ctx, orderOperation{ID: opID, Hash: hash, Orders: out, CreatedAt: time.Now().UTC()})
 		return nil, e
 	})
 	if isDuplicate(e) {

@@ -80,6 +80,35 @@ func TestVariantCheckoutRealMongo(t *testing.T) {
 	}
 	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	checkout := gin.H{"items": []gin.H{{"productId": id, "variantId": small, "qty": 2, "price": 1}, {"productId": id, "variantId": large, "qty": 1}}, "fulfillment": "pickup", "scheduledAt": future}
+	initial := call(200, "GET", "/api/cart", nil, buyerToken, "")
+	rev := initial["revision"].(string)
+	// Both devices start with the same revision. Exactly one write can win.
+	results := make(chan int, 2)
+	for range 2 {
+		go func() {
+			raw, _ := json.Marshal(gin.H{"productId": id, "variantId": small, "qty": 2, "cartRevision": rev})
+			req := httptest.NewRequest("POST", "/api/cart/items", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+buyerToken)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			results <- w.Code
+		}()
+	}
+	a, b := <-results, <-results
+	if !((a == 200 && b == 409) || (a == 409 && b == 200)) {
+		t.Fatalf("concurrent writes returned %d and %d", a, b)
+	}
+	first := call(200, "GET", "/api/cart", nil, buyerToken, "")
+	second := call(200, "POST", "/api/cart/items", gin.H{
+		"productId": id, "variantId": large, "qty": 1, "cartRevision": first["revision"],
+	}, buyerToken, "")
+	checkout["cartRevision"] = first["revision"]
+	call(409, "POST", "/api/orders", checkout, buyerToken, "variants-stale")
+	if count, err := db.Collection("orders").CountDocuments(ctx, bson.M{}); err != nil || count != 0 {
+		t.Fatalf("stale checkout wrote orders: %d, %v", count, err)
+	}
+	checkout["cartRevision"] = second["revision"]
 	orders := call(201, "POST", "/api/orders", checkout, buyerToken, "variants-one")["orders"].([]any)
 	if len(orders) != 1 {
 		t.Fatal("same seller variants split into separate orders")
