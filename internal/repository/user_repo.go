@@ -75,8 +75,19 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*models.User, 
 	return &user, nil
 }
 
-// Upsert creates or fully replaces the user document at _id=u.UID.
-func (r *UserRepo) Upsert(ctx context.Context, u *models.User) error {
-	_, err := r.users.ReplaceOne(ctx, bson.M{"_id": u.UID}, u, options.Replace().SetUpsert(true))
-	return err
+// UpdateProfile sets only the editable fields and returns the updated user.
+// It preserves identity and authentication fields, including fields written by
+// newer versions of the service.
+func (r *UserRepo) UpdateProfile(ctx context.Context, uid, name, phone, address string) (*models.User, error) {
+	var user models.User
+	err := r.users.FindOneAndUpdate(ctx, bson.M{"_id": uid},
+		bson.M{"$set": bson.M{"name": name, "phone": phone, "address": address}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&user)
+	if isNotFound(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }

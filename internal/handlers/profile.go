@@ -40,20 +40,12 @@ func (h *ProfileHandler) Upsert(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	u, err := h.users.Get(ctx, uid)
+	u, err := h.users.UpdateProfile(ctx, uid, req.Name, req.Phone, req.Address)
 	if errors.Is(err, repository.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load profile"})
-		return
-	}
-
-	u.Name = req.Name
-	u.Phone = req.Phone
-	u.Address = req.Address
-	if err := h.users.Upsert(ctx, u); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save profile"})
 		return
 	}
