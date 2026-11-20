@@ -242,6 +242,55 @@ func TestTelegramOrdersRealMongo(t *testing.T) {
 	if e = tr.Ack(ctx, job.ID, job.LeaseToken, 123); e != nil {
 		t.Fatal(e)
 	}
+
+	// Preserve the earlier five-state API and the first Codex's durable history format.
+	legacyID := bson.NewObjectID().Hex()
+	_, e = db.Collection("orders").InsertOne(ctx, models.Order{ID: legacyID, CustomerID: buyer.UID, SellerID: seller.UID, Items: []models.OrderItem{{ProductID: p1, Title: "Legacy cake", Price: 1000, Qty: 1}}, Total: 1000, Status: models.OrderPending, CreatedAt: time.Now().UTC()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	legacy := expect(200, "PATCH", "/api/orders/"+legacyID+"/status", gin.H{"status": "preparing"}, token(seller), "", "")
+	if legacy["status"] != "preparing" || len(legacy["history"].([]any)) != 1 {
+		t.Fatal("legacy status/history compatibility lost")
+	}
+	// Distinct concurrent clicks must produce one committed event, not two histories.
+	raceID := bson.NewObjectID().Hex()
+	raceOrder := delivery
+	raceOrder.ID = raceID
+	raceOrder.Status = models.OrderPending
+	raceOrder.History = []models.OrderEvent{{Status: models.OrderPending, At: time.Now().UTC(), Version: 1}}
+	raceOrder.Version = 1
+	if _, e = db.Collection("orders").InsertOne(ctx, raceOrder); e != nil {
+		t.Fatal(e)
+	}
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			code, _ := call("PATCH", bridge+"/orders/"+raceID+"/status", gin.H{"expectedStatus": "pending", "status": "accepted"}, secret, "888", fmt.Sprintf("tg:race-%d", i))
+			results <- code
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	success, conflict := 0, 0
+	for code := range results {
+		if code == 200 {
+			success++
+		}
+		if code == 409 {
+			conflict++
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatal("concurrent transitions were not serialized")
+	}
+	raced, e := repository.NewOrderRepo(db).Get(ctx, raceID)
+	if e != nil || len(raced.History) != 2 {
+		t.Fatal("race duplicated history")
+	}
+
 	// Binding uniqueness survives a second actor with the same valid account proof.
 	challenge := expect(200, "POST", bridge+"/link/challenges", gin.H{"phone": buyer.Phone, "requestedRole": "CLIENT"}, secret, "123", "")
 	expect(409, "POST", "/api/me/telegram/link/confirm", gin.H{"challengeId": challenge["id"], "password": password}, token(buyer), "", "")

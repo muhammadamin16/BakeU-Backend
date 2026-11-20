@@ -277,15 +277,23 @@ func (h *OrderHandler) List(c *gin.Context) {
 		incoming = []models.Order{}
 	}
 	for i := range placed {
+		legacyStatus := placed[i].Status
 		if e = h.orders.Hydrate(ctx, &placed[i]); e != nil {
 			orderError(c, e)
 			return
 		}
+		if placed[i].WorkflowVersion < 2 {
+			placed[i].Status = legacyStatus
+		}
 	}
 	for i := range incoming {
+		legacyStatus := incoming[i].Status
 		if e = h.orders.Hydrate(ctx, &incoming[i]); e != nil {
 			orderError(c, e)
 			return
+		}
+		if incoming[i].WorkflowVersion < 2 {
+			incoming[i].Status = legacyStatus
 		}
 	}
 	c.JSON(200, gin.H{"placed": placed, "incoming": incoming})
@@ -322,7 +330,14 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 			c.JSON(400, gin.H{"error": "expectedStatus and Idempotency-Key are required"})
 			return
 		}
-		req.ExpectedStatus = o.Status
+
+		legacy, err := h.orders.TransitionLegacyCommitted(c.Request.Context(), o.ID, u.UID, o.Status, req.Status)
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		c.JSON(200, legacy)
+		return
 	}
 	key := c.GetHeader("Idempotency-Key")
 	if !validKey(key) {

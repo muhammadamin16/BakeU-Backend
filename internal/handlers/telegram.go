@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -119,7 +120,7 @@ func (h *TelegramHandler) StartLink(c *gin.Context) {
 		return
 	}
 	site, e := url.Parse(h.siteURL)
-	if e != nil || site.Host == "" || site.Scheme != "https" {
+	if e != nil || site.Host == "" || site.Scheme != "https" || site.User != nil || site.RawQuery != "" {
 		c.JSON(503, gin.H{"error": "Telegram website URL is not configured"})
 		return
 	}
@@ -151,10 +152,20 @@ func (h *TelegramHandler) ConfirmLink(c *gin.Context) {
 		c.JSON(403, gin.H{"error": "Подтверждение аккаунта не выполнено."})
 		return
 	}
+
 	if e = h.repo.Confirm(c.Request.Context(), req.Challenge, uid); e != nil {
+		if errors.Is(e, repository.ErrConflict) {
+			c.JSON(409, gin.H{"error": "Ссылка недействительна или аккаунт уже привязан. Вернитесь в бот для проверки."})
+			return
+		}
+		if errors.Is(e, repository.ErrForbidden) {
+			c.JSON(403, gin.H{"error": "Телефон или роль аккаунта не совпадает с подтверждённым контактом."})
+			return
+		}
 		orderError(c, e)
 		return
 	}
+
 	h.guard.Reset(c.ClientIP(), key)
 	c.JSON(200, gin.H{"linked": true, "confirmed": true})
 }

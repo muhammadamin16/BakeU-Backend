@@ -96,6 +96,10 @@ func (r *OrderRepo) CreateCommitted(ctx context.Context, uid, key, hash string, 
 	return out, nil
 }
 func (r *OrderRepo) Hydrate(ctx context.Context, o *models.Order) error {
+	if o.WorkflowVersion >= 2 {
+		o.Project()
+		return nil
+	} // V2 snapshots never depend on today's user/shop profile.
 	if o.ShopID == "" {
 		m, e := NewMarketRepo(r.db).GetBySeller(ctx, o.SellerID)
 		if e != nil {
@@ -163,9 +167,15 @@ func (r *OrderRepo) TransitionCommitted(ctx context.Context, id, sellerID string
 		event := models.OrderEvent{Status: to, At: now, ActorID: sellerID, Version: o.Version}
 		o.History = append(o.History, event)
 		filter := bson.M{"_id": id, "sellerId": sellerID, "status": rawStatus}
+
 		if expectedVersion != nil {
-			filter["version"] = *expectedVersion
+			if *expectedVersion == 0 {
+				filter["$or"] = bson.A{bson.M{"version": 0}, bson.M{"version": bson.M{"$exists": false}}}
+			} else {
+				filter["version"] = *expectedVersion
+			}
 		}
+
 		result, e := r.orders.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"status": to, "version": o.Version, "workflowVersion": 2, "updatedAt": now, "shopId": o.ShopID, "shopName": o.ShopName, "buyerName": o.BuyerName, "buyerPhone": o.BuyerPhone, "fulfillment": o.Fulfillment}, "$push": bson.M{"history": event}})
 		if e != nil {
 			return nil, e
@@ -233,4 +243,47 @@ func (r *OrderRepo) Page(ctx context.Context, uid string, seller bool, view stri
 		}
 	}
 	return out, next, nil
+}
+
+// Legacy callers retain their five-state protocol; writes still enqueue notifications atomically.
+func (r *OrderRepo) TransitionLegacyCommitted(ctx context.Context, id, seller string, from, to models.OrderStatus) (*models.Order, error) {
+	session, e := r.client.StartSession()
+	if e != nil {
+		return nil, e
+	}
+	defer session.EndSession(ctx)
+	var result *models.Order
+	_, e = session.WithTransaction(ctx, func(ctx context.Context) (any, error) {
+		o, err := r.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if o.SellerID != seller {
+			return nil, ErrForbidden
+		}
+		if o.WorkflowVersion >= 2 || o.Status != from || !models.CanTransition(from, to) {
+			return nil, ErrConflict
+		}
+		updated, err := r.Transition(ctx, id, seller, from, to)
+		if err != nil {
+			return nil, err
+		}
+		if updated == nil {
+			return nil, ErrConflict
+		}
+		updated.Version++
+		if _, err = r.orders.UpdateOne(ctx, bson.M{"_id": id, "status": to}, bson.M{"$set": bson.M{"version": updated.Version}}); err != nil {
+			return nil, err
+		}
+		snapshot := *updated
+		if err = r.Hydrate(ctx, &snapshot); err != nil {
+			return nil, err
+		}
+		if err = enqueueOrderEvents(ctx, r.db, &snapshot, "order.status_changed"); err != nil {
+			return nil, err
+		}
+		result = updated
+		return nil, nil
+	})
+	return result, e
 }
