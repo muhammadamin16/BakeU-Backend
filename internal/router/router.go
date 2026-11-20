@@ -53,7 +53,12 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	imageStore := storage.NewStore(db)
 
 	// Handlers
-	authH := handlers.NewAuthHandler(userRepo, jwtm, loginGuard)
+	sessions := repository.NewSessionRepo(db)
+	var refreshSessions *repository.SessionRepo
+	if cfg.RefreshSessions {
+		refreshSessions = sessions
+	}
+	authH := handlers.NewAuthHandler(userRepo, jwtm, loginGuard, refreshSessions)
 	profile := handlers.NewProfileHandler(userRepo, marketRepo)
 	product := handlers.NewProductHandler(productRepo, imageStore, marketRepo)
 	market := handlers.NewMarketHandler(marketRepo, userRepo, imageStore, mailer,
@@ -70,6 +75,10 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	{
 		public.POST("/auth/signup", authH.Signup)
 		public.POST("/auth/login", authH.Login)
+		if cfg.RefreshSessions {
+			public.POST("/auth/refresh", authH.Refresh)
+			public.POST("/auth/logout", authH.Logout)
+		}
 
 		public.GET("/products", product.List)
 		public.GET("/products/:id", product.GetOne)
@@ -85,9 +94,12 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 
 	// Authenticated routes
 	authed := r.Group("/api")
-	authed.Use(middleware.AuthRequired(jwtm), middleware.BodyLimit(jsonBodyLimit))
+	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.BodyLimit(jsonBodyLimit))
 	{
 		authed.GET("/me", profile.Me)
+		if cfg.RefreshSessions {
+			authed.POST("/auth/logout-all", authH.LogoutAll)
+		}
 		authed.POST("/profile", profile.Upsert)
 
 		authed.GET("/cart", cart.Get)
@@ -99,7 +111,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 
 	// Customer-only routes
 	customer := r.Group("/api")
-	customer.Use(middleware.AuthRequired(jwtm), middleware.RequireRole(userRepo, models.RoleCustomer),
+	customer.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireRole(userRepo, models.RoleCustomer),
 		middleware.BodyLimit(jsonBodyLimit))
 	{
 		customer.POST("/orders", order.Checkout)
@@ -110,7 +122,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	// sub-groups apply different body limits (a single route must not stack two
 	// limits, as the smaller inner reader would win).
 	seller := r.Group("/api")
-	seller.Use(middleware.AuthRequired(jwtm), middleware.RequireRole(userRepo, models.RoleSeller))
+	seller.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireRole(userRepo, models.RoleSeller))
 
 	sellerJSON := seller.Group("")
 	sellerJSON.Use(middleware.BodyLimit(jsonBodyLimit))

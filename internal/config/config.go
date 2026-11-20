@@ -12,6 +12,8 @@ type Config struct {
 	MongoDB   string // database name
 	JWTSecret string // HMAC secret used to sign/verify auth tokens
 
+	RefreshSessions bool
+
 	// Market approval pipeline.
 	ResendAPIKey       string   // Resend API key for transactional email
 	EmailFrom          string   // verified "from" address, e.g. "Bakeu <noreply@bakeu.app>"
@@ -23,10 +25,11 @@ type Config struct {
 // Load reads configuration from the environment, applying sensible defaults.
 func Load() Config {
 	return Config{
-		Port:      getEnv("PORT", "8080"),
-		MongoURI:  getEnv("MONGODB_URI", "mongodb://localhost:27017"),
-		MongoDB:   getEnv("MONGODB_DB", "bakeu"),
-		JWTSecret: os.Getenv("JWT_SECRET"),
+		Port:            getEnv("PORT", "8080"),
+		MongoURI:        getEnv("MONGODB_URI", "mongodb://localhost:27017"),
+		MongoDB:         getEnv("MONGODB_DB", "bakeu"),
+		JWTSecret:       os.Getenv("JWT_SECRET"),
+		RefreshSessions: os.Getenv("AUTH_REFRESH_SESSIONS") == "true",
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		EmailFrom:          getEnv("EMAIL_FROM", "Bakeu <onboarding@resend.dev>"),

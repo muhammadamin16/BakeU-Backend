@@ -11,6 +11,12 @@ import (
 
 // tokenTTL is how long an issued token stays valid.
 const tokenTTL = 7 * 24 * time.Hour
+const SessionAccessTTL = 15 * time.Minute
+
+type Claims struct {
+	jwt.RegisteredClaims
+	SessionID string `json:"sid,omitempty"`
+}
 
 // Manager signs and parses JWTs with a single HMAC secret.
 type Manager struct {
@@ -24,26 +30,42 @@ func NewManager(secret string) *Manager {
 
 // Sign returns a signed token whose subject is the given user ID.
 func (m *Manager) Sign(userID string) (string, error) {
+	return m.sign(userID, "", tokenTTL)
+}
+
+func (m *Manager) SignSession(userID, sessionID string) (string, error) {
+	return m.sign(userID, sessionID, SessionAccessTTL)
+}
+
+func (m *Manager) sign(userID, sessionID string, ttl time.Duration) (string, error) {
 	now := time.Now()
-	claims := jwt.RegisteredClaims{
+	claims := Claims{SessionID: sessionID, RegisteredClaims: jwt.RegisteredClaims{
 		Subject:   userID,
 		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(tokenTTL)),
-	}
+		ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+	}}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
 }
 
 // Parse validates the token and returns the user ID from its subject claim.
 func (m *Manager) Parse(tokenString string) (string, error) {
-	claims := &jwt.RegisteredClaims{}
+	claims, err := m.ParseClaims(tokenString)
+	if err != nil {
+		return "", err
+	}
+	return claims.Subject, nil
+}
+
+func (m *Manager) ParseClaims(tokenString string) (*Claims, error) {
+	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(_ *jwt.Token) (any, error) {
 		return m.secret, nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
 	if err != nil || !token.Valid {
-		return "", errors.New("invalid token")
+		return nil, errors.New("invalid token")
 	}
 	if claims.Subject == "" {
-		return "", errors.New("token missing subject")
+		return nil, errors.New("token missing subject")
 	}
-	return claims.Subject, nil
+	return claims, nil
 }
