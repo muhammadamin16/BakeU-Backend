@@ -1,6 +1,10 @@
 package router
 
 import (
+	"log"
+	"net/http"
+	"runtime/debug"
+
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
@@ -23,7 +27,14 @@ const (
 
 // New builds the HTTP router with all routes registered.
 func New(db *mongo.Database, cfg config.Config) *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
+	// Approval links carry credentials in query parameters. Avoid logging
+	// those parameters or dumping cookies/headers on panic.
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{SkipQueryString: true}))
+	r.Use(gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, _ any) {
+		log.Printf("request panic: %s %s\n%s", c.Request.Method, c.FullPath(), debug.Stack())
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
 	r.Use(middleware.CORS(cfg.BrowserOrigins))
 
 	// Cap the in-memory portion of multipart uploads; larger parts spill to
@@ -64,7 +75,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	market := handlers.NewMarketHandler(marketRepo, userRepo, imageStore, mailer,
 		cfg.AdminEmails, cfg.AppBaseURL, cfg.MarketReviewSecret)
 	image := handlers.NewImageHandler(imageStore)
-	cart := handlers.NewCartHandler(cartRepo)
+	cart := handlers.NewCartHandler(cartRepo, productRepo, marketRepo)
 	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo, userRepo)
 	review := handlers.NewReviewHandler(reviewRepo, orderRepo)
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
