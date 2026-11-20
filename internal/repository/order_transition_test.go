@@ -45,8 +45,8 @@ func TestOrderTransitionRejectsStaleStatusAndWrongSeller(t *testing.T) {
 		{"seller", models.OrderCancelled, false},
 	} {
 		got, err := repo.Transition(ctx, "order", tc.seller, models.OrderPending, tc.status)
-		if err != nil || got != tc.want {
-			t.Fatalf("transition by %s to %s = %t, %v", tc.seller, tc.status, got, err)
+		if err != nil || (got != nil) != tc.want {
+			t.Fatalf("transition by %s to %s = %v, %v", tc.seller, tc.status, got, err)
 		}
 	}
 	var doc bson.M
@@ -56,4 +56,13 @@ func TestOrderTransitionRejectsStaleStatusAndWrongSeller(t *testing.T) {
 	if doc["status"] != "preparing" || doc["auditMarker"] != true {
 		t.Fatal("status update did not preserve the expected order state")
 	}
+	order, err := repo.Get(ctx, "order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order.History) != 1 || order.History[0].Status != models.OrderPreparing ||
+		order.History[0].ActorID != "seller" || order.UpdatedAt == nil || !order.History[0].At.Equal(*order.UpdatedAt) {
+		t.Fatalf("unexpected stored history: %+v", order.History)
+	}
+
 }

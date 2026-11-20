@@ -119,6 +119,8 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			Status:          models.OrderPending,
 			DeliveryAddress: req.DeliveryAddress,
 			CreatedAt:       now,
+			UpdatedAt:       &now,
+			History:         []models.OrderEvent{{Status: models.OrderPending, At: now, ActorID: uid}},
 		})
 	}
 
@@ -203,15 +205,14 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	changed, err := h.orders.Transition(ctx, order.ID, order.SellerID, order.Status, req.Status)
+	updated, err := h.orders.Transition(ctx, order.ID, order.SellerID, order.Status, req.Status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update order"})
 		return
 	}
-	if !changed {
+	if updated == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "order status changed; reload and try again"})
 		return
 	}
-	order.Status = req.Status
-	c.JSON(http.StatusOK, order)
+	c.JSON(http.StatusOK, updated)
 }
