@@ -36,12 +36,9 @@ func (m *Manager) Sign(userID string) (string, error) {
 // Parse validates the token and returns the user ID from its subject claim.
 func (m *Manager) Parse(tokenString string) (string, error) {
 	claims := &jwt.RegisteredClaims{}
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
-		}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(_ *jwt.Token) (any, error) {
 		return m.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
 	if err != nil || !token.Valid {
 		return "", errors.New("invalid token")
 	}
