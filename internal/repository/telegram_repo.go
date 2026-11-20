@@ -105,6 +105,10 @@ func (r *TelegramRepo) EnsureIndexes(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	_, err = r.db.Collection("telegram_login_tickets").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)})
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Collection("telegram_bindings").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)})
 	if err != nil {
 		return err

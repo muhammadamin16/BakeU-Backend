@@ -132,3 +132,26 @@ The browser used real Go and a disposable MongoDB replica set; Telegram transpor
 was simulated. Production variables, live Telegram delivery and legacy-data
 migration still require a separately reviewed activation.
 
+## Mini App uses the same Go identity
+
+With phone accounts and refresh sessions enabled, the trusted bot API first
+verifies Telegram's signed `initData` and freshness. It calls service-only
+`POST /api/integrations/telegram/auth/launch` with the verified private actor.
+Only an existing, active, phone-verified binding receives a random login ticket;
+an unlinked actor receives `{linked:false}` and no account is created.
+
+The browser exchanges this ticket through `POST /api/auth/phone/telegram` with
+`{ticket}` and its existing browser-session header/origin. The result uses the
+same Go UID, access JWT and HttpOnly refresh cookie as website login. Native
+clients may use the existing `refresh` session mode; anonymous unrevocable JWT
+mode is rejected for this exchange. Tickets expire after one minute, are stored
+as hashes and consumed once in a transaction that rechecks the user and binding.
+Frozen users, removed bindings, expired tickets and replays are denied.
+
+Verified with real Node HMAC validation, Go/Mongo and HTTPS Chromium: the Mini App
+reads the original website UID after launch/reload, an unlinked Telegram actor
+cannot inherit an earlier website cookie, and revoked Go sessions stay signed
+out until an explicit fresh authentication. Telegram SDK/launch signatures were
+simulated using a test-only key. Existing legacy admin-only Node capabilities
+remain separate from customer/seller Go identity until Go admin RBAC is migrated.
+

@@ -126,3 +126,51 @@ func (h *PhoneAuthHandler) Contact(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"code": code})
 }
+
+func (h *PhoneAuthHandler) Launch(c *gin.Context) {
+	actor := c.GetHeader("X-Telegram-User-Id")
+	if !telegramActorRE.MatchString(actor) {
+		c.JSON(403, gin.H{"error": "private Telegram identity required"})
+		return
+	}
+	if h.auth.sessions == nil {
+		c.JSON(503, gin.H{"error": "Go refresh sessions are required"})
+		return
+	}
+	ticket, uid, err := h.repo.NewLoginTicket(c.Request.Context(), actor)
+	if err != nil {
+		orderError(c, err)
+		return
+	}
+	if ticket == "" {
+		c.JSON(200, gin.H{"linked": false})
+		return
+	}
+	c.JSON(200, gin.H{"linked": true, "ticket": ticket, "uid": uid})
+}
+
+func (h *PhoneAuthHandler) Exchange(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	mode := c.GetHeader("X-BakeU-Session")
+	if mode != browserSession && mode != "refresh" {
+		c.JSON(400, gin.H{"error": "a revocable session mode is required"})
+		return
+	}
+	if h.auth.sessions == nil {
+		c.JSON(503, gin.H{"error": "Go refresh sessions are required"})
+		return
+	}
+	var req struct {
+		Ticket string `json:"ticket"`
+	}
+	if c.ShouldBindJSON(&req) != nil || !challengeRE.MatchString(req.Ticket) {
+		c.JSON(400, gin.H{"error": "invalid launch ticket"})
+		return
+	}
+	u, err := h.repo.ConsumeLoginTicket(c.Request.Context(), req.Ticket)
+	if err != nil {
+		orderError(c, err)
+		return
+	}
+	h.auth.issue(c, 200, u)
+}

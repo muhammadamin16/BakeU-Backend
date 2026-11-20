@@ -86,7 +86,9 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		phone := r.Group("/api/auth/phone", middleware.BodyLimit(jsonBodyLimit), authH.CheckSessionOrigin)
 		phone.POST("/start", phoneAuth.Start)
 		phone.POST("/verify", phoneAuth.Verify)
+		phone.POST("/telegram", phoneAuth.Exchange)
 		bridge.POST("/auth/phone/contact", phoneAuth.Contact)
+		bridge.POST("/auth/launch", phoneAuth.Launch)
 	}
 	// Public routes (no auth)
 	public := r.Group("/api")

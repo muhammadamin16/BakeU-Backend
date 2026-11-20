@@ -121,6 +121,31 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	if me["verifiedPhoneE164"] != "+998901234567" || me["passwordHash"] != nil {
 		t.Fatal("wrong identity or password leak")
 	}
+	// Signed Telegram launches use a short one-use ticket and the same Go session.
+	expect(401, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, "", "401")
+	if expect(200, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, bridge, "900")["linked"] != false {
+		t.Fatal("unlinked actor inherited a Go user")
+	}
+	launch := expect(200, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, bridge, "401")
+	if launch["uid"] != uid || launch["token"] != nil {
+		t.Fatal("wrong launch identity or service-issued browser token")
+	}
+	launchBody := gin.H{"ticket": launch["ticket"]}
+	expect(400, "POST", "/api/auth/phone/telegram", launchBody, "", "")
+	launchStatus, launched, launchCookie := call("POST", "/api/auth/phone/telegram", launchBody, "", "", true, "")
+	if launchStatus != 200 || launched["user"].(map[string]any)["uid"] != uid || !strings.Contains(launchCookie, "HttpOnly") {
+		t.Fatal("launch did not establish the shared Go session")
+	}
+	if replay, _, _ := call("POST", "/api/auth/phone/telegram", launchBody, "", "", true, ""); replay != 409 {
+		t.Fatal("launch ticket replayed")
+	}
+	expiring := expect(200, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, bridge, "401")
+	if _, e := db.Collection("telegram_login_tickets").UpdateMany(ctx, bson.M{"userId": uid, "used": false}, bson.M{"$set": bson.M{"expiresAt": time.Now().Add(-time.Second)}}); e != nil {
+		t.Fatal(e)
+	}
+	if status, _, _ := call("POST", "/api/auth/phone/telegram", gin.H{"ticket": expiring["ticket"]}, "", "", true, ""); status != 409 {
+		t.Fatal("expired launch ticket accepted")
+	}
 	expect(200, "POST", "/api/profile", gin.H{"name": "Edited", "phone": "+998909999999", "verifiedPhoneE164": "+998909999999"}, token, "")
 	login := start("login", "+998901234567", "", "")
 	loginCode := contact(login, "+998901234567", "401")
@@ -173,6 +198,7 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 		t.Fatal("exhausted proof accepted")
 	}
 	// Freeze blocks password and OTP login even with the right proof.
+	beforeFreeze := expect(200, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, bridge, "401")
 	_, err = db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid}, bson.M{"$set": bson.M{"frozen": true}})
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +206,9 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	expect(403, "POST", "/api/auth/login", gin.H{"email": "buyer@test.invalid", "password": "test-password-123"}, "", "")
 	expect(403, "GET", "/api/me", nil, token, "")
 	expect(403, "GET", "/api/orders", nil, token, "")
+	if status, _, _ := call("POST", "/api/auth/phone/telegram", gin.H{"ticket": beforeFreeze["ticket"]}, "", "", true, ""); status != 403 {
+		t.Fatal("a ticket restored a frozen account")
+	}
 	frozen := start("login", "+998901234567", "", "")
 	frozenCode := contact(frozen, "+998901234567", "401")
 	expect(403, "POST", "/api/auth/phone/verify", gin.H{"id": frozen, "code": frozenCode}, "", "")
