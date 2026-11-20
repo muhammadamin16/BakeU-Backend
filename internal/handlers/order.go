@@ -157,9 +157,12 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		return
 	}
 	quantities := map[string]int{}
+	lines := map[string]models.CartItem{}
 	for _, item := range req.Items {
-		quantities[item.ProductID] += item.Qty
-		if item.Qty < 1 || quantities[item.ProductID] > maxItemQty {
+		line := item.ProductID + "\x00" + item.VariantID
+		quantities[line] += item.Qty
+		lines[line] = item
+		if item.ProductID == "" || len(item.ProductID) > 128 || strings.ContainsRune(item.ProductID, '\x00') || len(item.VariantID) > 24 || strings.ContainsRune(item.VariantID, '\x00') || item.Qty < 1 || quantities[line] > maxItemQty {
 			c.JSON(400, gin.H{"error": "Неверное количество товара."})
 			return
 		}
@@ -171,7 +174,8 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		p, err := h.products.Get(ctx, id)
+		line := lines[id]
+		p, err := h.products.Get(ctx, line.ProductID)
 		if err != nil {
 			orderError(c, err)
 			return
@@ -180,7 +184,21 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			c.JSON(400, gin.H{"error": "Товар недоступен."})
 			return
 		}
-		itemsBySeller[p.SellerID] = append(itemsBySeller[p.SellerID], models.OrderItem{ProductID: p.ID, Title: p.Title, Price: p.Price, Qty: quantities[id]})
+		price, variantName := p.Price, ""
+		if line.VariantID != "" {
+			found := false
+			for _, variant := range p.Variants {
+				if variant.ID == line.VariantID {
+					price, variantName, found = variant.Price, variant.Name, true
+					break
+				}
+			}
+			if !found || price <= 0 || price > 1e12 || math.IsNaN(price) || math.IsInf(price, 0) {
+				c.JSON(400, gin.H{"error": "Выбранный вариант товара недоступен."})
+				return
+			}
+		}
+		itemsBySeller[p.SellerID] = append(itemsBySeller[p.SellerID], models.OrderItem{ProductID: p.ID, VariantID: line.VariantID, VariantName: variantName, Title: p.Title, Price: price, Qty: quantities[id]})
 	}
 	sellers := []string{}
 	for seller := range itemsBySeller {
@@ -352,5 +370,5 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	c.JSON(200, changed)
 }
 func (h *OrderHandler) Capabilities(c *gin.Context) {
-	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true})
+	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true, "variantSnapshots": true})
 }

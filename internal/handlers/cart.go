@@ -54,7 +54,7 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 
 	found := false
 	for i := range cart.Items {
-		if cart.Items[i].ProductID == req.ProductID {
+		if cart.Items[i].ProductID == req.ProductID && cart.Items[i].VariantID == req.VariantID {
 			cart.Items[i].Qty = req.Qty
 			found = true
 			break
@@ -67,7 +67,7 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "cart is full"})
 			return
 		}
-		cart.Items = append(cart.Items, models.CartItem{ProductID: req.ProductID, Qty: req.Qty})
+		cart.Items = append(cart.Items, req)
 	}
 
 	if err := h.carts.Save(ctx, cart); err != nil {
@@ -80,6 +80,7 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 // RemoveItem handles DELETE /api/cart/items/:productId.
 func (h *CartHandler) RemoveItem(c *gin.Context) {
 	productID := c.Param("productId")
+	variantID, specificVariant := c.GetQuery("variantId")
 
 	ctx := c.Request.Context()
 	cart, err := h.carts.Get(ctx, middleware.UID(c))
@@ -90,7 +91,7 @@ func (h *CartHandler) RemoveItem(c *gin.Context) {
 
 	filtered := make([]models.CartItem, 0, len(cart.Items))
 	for _, item := range cart.Items {
-		if item.ProductID != productID {
+		if item.ProductID != productID || specificVariant && item.VariantID != variantID {
 			filtered = append(filtered, item)
 		}
 	}

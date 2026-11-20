@@ -2,6 +2,7 @@ package models
 
 // CartItem is a single line in a customer's cart.
 type CartItem struct {
+	VariantID string `bson:"variantId,omitempty" json:"variantId,omitempty"`
 	ProductID string `bson:"productId" json:"productId"`
 	Qty       int    `bson:"qty" json:"qty"`
 }

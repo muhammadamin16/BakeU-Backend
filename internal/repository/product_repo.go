@@ -24,6 +24,9 @@ func NewProductRepo(db *mongo.Database) *ProductRepo {
 // Create assigns a new ID, stores the product, and returns the ID.
 func (r *ProductRepo) Create(ctx context.Context, p *models.Product) (string, error) {
 	p.ID = bson.NewObjectID().Hex()
+	for i := range p.Variants {
+		p.Variants[i].ID = bson.NewObjectID().Hex()
+	}
 	if _, err := r.products.InsertOne(ctx, p); err != nil {
 		return "", err
 	}
@@ -42,6 +45,7 @@ func (r *ProductRepo) Get(ctx context.Context, id string) (*models.Product, erro
 	if p.ImageURLs == nil {
 		p.ImageURLs = []string{}
 	}
+	p.ExposeVariantIDs()
 	return &p, nil
 }
 
@@ -68,6 +72,7 @@ func (r *ProductRepo) patch(ctx context.Context, filter, update any) (*models.Pr
 	if product.ImageURLs == nil {
 		product.ImageURLs = []string{}
 	}
+	product.ExposeVariantIDs()
 	return &product, nil
 }
 
@@ -113,6 +118,7 @@ func (r *ProductRepo) List(ctx context.Context, category, sellerID, search strin
 		return nil, err
 	}
 	for i := range products {
+		products[i].ExposeVariantIDs()
 		if products[i].ImageURLs == nil {
 			products[i].ImageURLs = []string{}
 		}

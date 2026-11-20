@@ -75,6 +75,24 @@ own-contact + account-password proof. Startup does not backfill phone ownership
 or merge accounts. A conflicting proof rolls back its user, binding and challenge
 changes together. Existing production data is never inferred or migrated.
 
+## Product variant snapshots
+
+Products now expose stable variant `id` values. New variants receive server IDs;
+name-only legacy variants get deterministic projected IDs without writes during
+reads. Editors preserve an existing ID when renaming/reordering variants.
+Checkout accepts optional `items[].variantId`, validates it against that product,
+and stores `variantId`, `variantName` and the actual server price in the immutable
+order snapshot. An unknown/removed variant is rejected, never replaced with the
+base price. Different variants of one product remain separate lines. The cart
+likewise distinguishes variant IDs; DELETE with `?variantId=...` removes only
+that line (omitting it preserves legacy whole-product removal).
+
+`GET /api/orders/capabilities` advertises `variantSnapshots: true`. New website
+clients refuse a variant checkout if that capability is absent, preventing an
+older server from silently ignoring the selection. Verified with real Mongo and
+HTTPS browser checkout: variant price, persisted snapshot, image upload, catalog
+preselection, replay to the same order ID, seller acceptance and reload history.
+
 ## Confirmed registration and login (opt-in)
 
 Deploy both services first, then configure `AUTH_PHONE_ACCOUNTS=true` and

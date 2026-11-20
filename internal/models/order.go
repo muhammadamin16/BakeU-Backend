@@ -55,10 +55,12 @@ func CanTransition(from, to OrderStatus) bool {
 // OrderItem is a snapshot of a product at the time of ordering (title/price are
 // copied so later product edits don't change historical orders).
 type OrderItem struct {
-	ProductID string  `bson:"productId" json:"productId"`
-	Title     string  `bson:"title" json:"title"`
-	Price     float64 `bson:"price" json:"price"`
-	Qty       int     `bson:"qty" json:"qty"`
+	VariantID   string  `bson:"variantId,omitempty" json:"variantId,omitempty"`
+	VariantName string  `bson:"variantName,omitempty" json:"variantName,omitempty"`
+	ProductID   string  `bson:"productId" json:"productId"`
+	Title       string  `bson:"title" json:"title"`
+	Price       float64 `bson:"price" json:"price"`
+	Qty         int     `bson:"qty" json:"qty"`
 }
 
 // Order is a placed order for one seller, stored in the orders collection. A
