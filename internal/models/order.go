@@ -51,16 +51,24 @@ type OrderItem struct {
 	Qty       int     `bson:"qty" json:"qty"`
 }
 
+type OrderEvent struct {
+	Status  OrderStatus `bson:"status" json:"status"`
+	At      time.Time   `bson:"at" json:"at"`
+	ActorID string      `bson:"actorId" json:"actorId"`
+}
+
 // Order is a placed order for one seller, stored in the orders collection. A
 // checkout containing items from multiple sellers produces one Order per
 // seller.
 type Order struct {
-	ID              string      `bson:"_id" json:"id"`
-	CustomerID      string      `bson:"customerId" json:"customerId"`
-	SellerID        string      `bson:"sellerId" json:"sellerId"`
-	Items           []OrderItem `bson:"items" json:"items"`
-	Total           float64     `bson:"total" json:"total"`
-	Status          OrderStatus `bson:"status" json:"status"`
-	DeliveryAddress string      `bson:"deliveryAddress" json:"deliveryAddress"`
-	CreatedAt       time.Time   `bson:"createdAt" json:"createdAt"`
+	History         []OrderEvent `bson:"history,omitempty" json:"history,omitempty"`
+	UpdatedAt       *time.Time   `bson:"updatedAt,omitempty" json:"updatedAt,omitempty"`
+	ID              string       `bson:"_id" json:"id"`
+	CustomerID      string       `bson:"customerId" json:"customerId"`
+	SellerID        string       `bson:"sellerId" json:"sellerId"`
+	Items           []OrderItem  `bson:"items" json:"items"`
+	Total           float64      `bson:"total" json:"total"`
+	Status          OrderStatus  `bson:"status" json:"status"`
+	DeliveryAddress string       `bson:"deliveryAddress" json:"deliveryAddress"`
+	CreatedAt       time.Time    `bson:"createdAt" json:"createdAt"`
 }

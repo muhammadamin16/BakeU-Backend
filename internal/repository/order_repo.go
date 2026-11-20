@@ -6,6 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"bakeu/internal/models"
 )
@@ -99,13 +100,20 @@ func (r *OrderRepo) Get(ctx context.Context, id string) (*models.Order, error) {
 
 // Transition applies the status change only if the seller and current status
 // still match. A concurrent status change is reported to the caller.
-func (r *OrderRepo) Transition(ctx context.Context, id, sellerID string, from, to models.OrderStatus) (bool, error) {
-	result, err := r.orders.UpdateOne(ctx, bson.M{"_id": id, "sellerId": sellerID, "status": from},
-		bson.M{"$set": bson.M{"status": to}})
-	if err != nil {
-		return false, err
+func (r *OrderRepo) Transition(ctx context.Context, id, sellerID string, from, to models.OrderStatus) (*models.Order, error) {
+	now := time.Now().UTC()
+	event := models.OrderEvent{Status: to, At: now, ActorID: sellerID}
+	var order models.Order
+	err := r.orders.FindOneAndUpdate(ctx, bson.M{"_id": id, "sellerId": sellerID, "status": from},
+		bson.M{"$set": bson.M{"status": to, "updatedAt": now}, "$push": bson.M{"history": event}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&order)
+	if isNotFound(err) {
+		return nil, nil
 	}
-	return result.MatchedCount == 1, nil
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
 }
 
 // ListByCustomer returns all orders placed by a customer.
