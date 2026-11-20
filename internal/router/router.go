@@ -24,7 +24,7 @@ const (
 // New builds the HTTP router with all routes registered.
 func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	r := gin.Default()
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORS(cfg.BrowserOrigins))
 
 	// Cap the in-memory portion of multipart uploads; larger parts spill to
 	// disk and are still bounded by the per-route BodyLimit middleware below.
@@ -58,7 +58,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	if cfg.RefreshSessions {
 		refreshSessions = sessions
 	}
-	authH := handlers.NewAuthHandler(userRepo, jwtm, loginGuard, refreshSessions)
+	authH := handlers.NewAuthHandler(userRepo, jwtm, loginGuard, refreshSessions, cfg.BrowserOrigins)
 	profile := handlers.NewProfileHandler(userRepo, marketRepo)
 	product := handlers.NewProductHandler(productRepo, imageStore, marketRepo)
 	market := handlers.NewMarketHandler(marketRepo, userRepo, imageStore, mailer,
@@ -73,11 +73,11 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	public := r.Group("/api")
 	public.Use(middleware.BodyLimit(jsonBodyLimit))
 	{
-		public.POST("/auth/signup", authH.Signup)
-		public.POST("/auth/login", authH.Login)
+		public.POST("/auth/signup", authH.CheckSessionOrigin, authH.Signup)
+		public.POST("/auth/login", authH.CheckSessionOrigin, authH.Login)
 		if cfg.RefreshSessions {
-			public.POST("/auth/refresh", authH.Refresh)
-			public.POST("/auth/logout", authH.Logout)
+			public.POST("/auth/refresh", authH.CheckSessionOrigin, authH.Refresh)
+			public.POST("/auth/logout", authH.CheckSessionOrigin, authH.Logout)
 		}
 
 		public.GET("/products", product.List)
@@ -98,7 +98,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	{
 		authed.GET("/me", profile.Me)
 		if cfg.RefreshSessions {
-			authed.POST("/auth/logout-all", authH.LogoutAll)
+			authed.POST("/auth/logout-all", authH.CheckSessionOrigin, authH.LogoutAll)
 		}
 		authed.POST("/profile", profile.Upsert)
 

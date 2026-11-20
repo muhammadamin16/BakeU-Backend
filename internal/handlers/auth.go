@@ -25,14 +25,15 @@ const (
 
 // AuthHandler serves signup and login, issuing app JWTs.
 type AuthHandler struct {
-	users    *repository.UserRepo
-	jwt      *auth.Manager
-	guard    *auth.LoginGuard
-	sessions *repository.SessionRepo
+	users          *repository.UserRepo
+	jwt            *auth.Manager
+	guard          *auth.LoginGuard
+	sessions       *repository.SessionRepo
+	browserOrigins []string
 }
 
-func NewAuthHandler(users *repository.UserRepo, jwt *auth.Manager, guard *auth.LoginGuard, sessions *repository.SessionRepo) *AuthHandler {
-	return &AuthHandler{users: users, jwt: jwt, guard: guard, sessions: sessions}
+func NewAuthHandler(users *repository.UserRepo, jwt *auth.Manager, guard *auth.LoginGuard, sessions *repository.SessionRepo, browserOrigins []string) *AuthHandler {
+	return &AuthHandler{users: users, jwt: jwt, guard: guard, sessions: sessions, browserOrigins: browserOrigins}
 }
 
 // normalizeEmail lower-cases and trims an email so case/whitespace differences
