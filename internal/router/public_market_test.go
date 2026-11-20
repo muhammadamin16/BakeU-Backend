@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"bakeu/internal/auth"
 	"bakeu/internal/config"
 )
 
@@ -67,4 +68,45 @@ func TestPublicMarketsReadFromMongoDB(t *testing.T) {
 	}
 	get("/api/markets/b", 404)
 	get("/api/markets?limit=0", 400)
+	_, err = db.Collection("users").InsertMany(ctx, []bson.M{
+		{"_id": "owner-a", "role": "seller"},
+		{"_id": "owner-b", "role": "seller"},
+		{"_id": "buyer", "role": "customer"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := func(userID, body string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPatch, "/api/market/mine", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if userID != "" {
+			token, err := auth.NewManager("test-secret").Sign(userID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != want {
+			t.Fatalf("PATCH by %s returned %d: %s", userID, w.Code, w.Body.String())
+		}
+	}
+	patch("", `{"name":"Denied"}`, 401)
+	patch("buyer", `{"name":"Denied"}`, 403)
+	patch("owner-b", `{"name":"Denied","sellerId":"owner-a"}`, 404)
+	patch("owner-a", `{"lat":91,"lng":69}`, 400)
+	patch("owner-a", `{"lat":41.4}`, 400)
+	patch("owner-a", `{"name":"New name","lat":41.4,"lng":69.3,"sellerId":"buyer","status":"pending"}`, 200)
+	body = get("/api/markets/a", 200)
+	if !strings.Contains(body, `"sellerId":"owner-a"`) || !strings.Contains(body, `"name":"New name"`) ||
+		!strings.Contains(body, `"lat":41.4`) {
+		t.Fatalf("unexpected updated storefront: %s", body)
+	}
+	patch("owner-a", `{"clearPoint":true}`, 200)
+	if body := get("/api/markets/a", 200); strings.Contains(body, `"lat":`) || strings.Contains(body, `"lng":`) {
+		t.Fatalf("coordinates stayed visible after clearing: %s", body)
+	}
+
 }
