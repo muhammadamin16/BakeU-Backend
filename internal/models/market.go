@@ -43,6 +43,9 @@ type Market struct {
 	Email           string       `bson:"email" json:"email"`
 	City            string       `bson:"city" json:"city"`
 	Area            string       `bson:"area" json:"area"`
+	Address         string       `bson:"address,omitempty" json:"address,omitempty"`
+	Latitude        *float64     `bson:"latitude,omitempty" json:"lat,omitempty"`
+	Longitude       *float64     `bson:"longitude,omitempty" json:"lng,omitempty"`
 	Fulfillment     Fulfillment  `bson:"fulfillment" json:"fulfillment"`
 	LogoURL         string       `bson:"logoURL" json:"logoURL"`
 	Status          MarketStatus `bson:"status" json:"status"`

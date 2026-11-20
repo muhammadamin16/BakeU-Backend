@@ -10,8 +10,10 @@ import (
 	"html"
 	"html/template"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -70,6 +72,20 @@ func (h *MarketHandler) Mine(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+func marketCoordinates(lat, lng string) (*float64, *float64, error) {
+	lat, lng = strings.TrimSpace(lat), strings.TrimSpace(lng)
+	if lat == "" && lng == "" {
+		return nil, nil, nil
+	}
+	latitude, latErr := strconv.ParseFloat(lat, 64)
+	longitude, lngErr := strconv.ParseFloat(lng, 64)
+	if latErr != nil || lngErr != nil || math.IsNaN(latitude) || math.IsNaN(longitude) ||
+		math.Abs(latitude) > 90 || math.Abs(longitude) > 180 {
+		return nil, nil, errors.New("lat and lng must be a valid coordinate pair")
+	}
+	return &latitude, &longitude, nil
+}
+
 // Apply handles POST /api/market (seller only) — submit or re-submit a bakery
 // application for review. Accepts multipart form fields plus a required `logo`
 // file. Creating is allowed when the seller has no market, or when their
@@ -86,6 +102,18 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	city := c.PostForm("city")
 	area := c.PostForm("area")
 	fulfillment := models.Fulfillment(c.PostForm("fulfillment"))
+	address, hasAddress := c.GetPostForm("address")
+	address = strings.TrimSpace(address)
+	lat, hasLat := c.GetPostForm("lat")
+	lng, hasLng := c.GetPostForm("lng")
+	latitude, longitude, coordinateErr := marketCoordinates(lat, lng)
+	if hasLat != hasLng {
+		coordinateErr = errors.New("lat and lng must be supplied together")
+	}
+	if coordinateErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": coordinateErr.Error()})
+		return
+	}
 
 	if name == "" || description == "" || phone == "" || emailAddr == "" || city == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name, description, phone, email and city are required"})
@@ -124,6 +152,9 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 			Email:       emailAddr,
 			City:        city,
 			Area:        area,
+			Address:     address,
+			Latitude:    latitude,
+			Longitude:   longitude,
 			Fulfillment: fulfillment,
 			LogoURL:     logoURL,
 			Status:      models.MarketPending,
@@ -149,6 +180,13 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	existing.Email = emailAddr
 	existing.City = city
 	existing.Area = area
+	if hasAddress {
+		existing.Address = address
+	}
+	if hasLat && hasLng {
+		existing.Latitude = latitude
+		existing.Longitude = longitude
+	}
 	existing.Fulfillment = fulfillment
 	existing.LogoURL = logoURL
 	existing.Status = models.MarketPending
