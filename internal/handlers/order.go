@@ -203,10 +203,15 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	order.Status = req.Status
-	if err := h.orders.Update(ctx, order); err != nil {
+	changed, err := h.orders.Transition(ctx, order.ID, order.SellerID, order.Status, req.Status)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update order"})
 		return
 	}
+	if !changed {
+		c.JSON(http.StatusConflict, gin.H{"error": "order status changed; reload and try again"})
+		return
+	}
+	order.Status = req.Status
 	c.JSON(http.StatusOK, order)
 }

@@ -97,10 +97,15 @@ func (r *OrderRepo) Get(ctx context.Context, id string) (*models.Order, error) {
 	return &o, nil
 }
 
-// Update fully overwrites the order document at _id=o.ID.
-func (r *OrderRepo) Update(ctx context.Context, o *models.Order) error {
-	_, err := r.orders.ReplaceOne(ctx, bson.M{"_id": o.ID}, o)
-	return err
+// Transition applies the status change only if the seller and current status
+// still match. A concurrent status change is reported to the caller.
+func (r *OrderRepo) Transition(ctx context.Context, id, sellerID string, from, to models.OrderStatus) (bool, error) {
+	result, err := r.orders.UpdateOne(ctx, bson.M{"_id": id, "sellerId": sellerID, "status": from},
+		bson.M{"$set": bson.M{"status": to}})
+	if err != nil {
+		return false, err
+	}
+	return result.MatchedCount == 1, nil
 }
 
 // ListByCustomer returns all orders placed by a customer.
