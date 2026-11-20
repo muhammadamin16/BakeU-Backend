@@ -40,6 +40,17 @@ func New(ctx context.Context, cfg config.Config) (*Clients, error) {
 		return nil, fmt.Errorf("ensure indexes: %w", err)
 	}
 
+	if cfg.RefreshSessions {
+		_, err := db.Collection("auth_sessions").Indexes().CreateMany(ctx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+			{Keys: bson.D{{Key: "userId", Value: 1}}},
+		})
+		if err != nil {
+			_ = client.Disconnect(ctx)
+			return nil, fmt.Errorf("ensure session indexes: %w", err)
+		}
+	}
+
 	return &Clients{Client: client, DB: db}, nil
 }
 

@@ -25,13 +25,14 @@ const (
 
 // AuthHandler serves signup and login, issuing app JWTs.
 type AuthHandler struct {
-	users *repository.UserRepo
-	jwt   *auth.Manager
-	guard *auth.LoginGuard
+	users    *repository.UserRepo
+	jwt      *auth.Manager
+	guard    *auth.LoginGuard
+	sessions *repository.SessionRepo
 }
 
-func NewAuthHandler(users *repository.UserRepo, jwt *auth.Manager, guard *auth.LoginGuard) *AuthHandler {
-	return &AuthHandler{users: users, jwt: jwt, guard: guard}
+func NewAuthHandler(users *repository.UserRepo, jwt *auth.Manager, guard *auth.LoginGuard, sessions *repository.SessionRepo) *AuthHandler {
+	return &AuthHandler{users: users, jwt: jwt, guard: guard, sessions: sessions}
 }
 
 // normalizeEmail lower-cases and trims an email so case/whitespace differences
@@ -102,12 +103,7 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		return
 	}
 
-	token, err := h.jwt.Sign(u.UID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue token"})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"token": token, "user": u})
+	h.issue(c, http.StatusCreated, u)
 }
 
 type loginRequest struct {
@@ -152,10 +148,5 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	h.guard.Reset(ip, email)
-	token, err := h.jwt.Sign(u.UID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue token"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"token": token, "user": u})
+	h.issue(c, http.StatusOK, u)
 }
