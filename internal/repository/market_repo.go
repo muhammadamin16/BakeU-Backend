@@ -92,3 +92,21 @@ func (r *MarketRepo) IsApprovedSeller(ctx context.Context, sellerID string) (boo
 	}
 	return m.Status == models.MarketApproved, nil
 }
+
+// ListApproved returns approved storefronts in stable ID order.
+func (r *MarketRepo) ListApproved(ctx context.Context, after string, limit int) ([]models.Market, error) {
+	filter := bson.M{"status": models.MarketApproved}
+	if after != "" {
+		filter["_id"] = bson.M{"$gt": after}
+	}
+	cursor, err := r.markets.Find(ctx, filter, options.Find().
+		SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(limit)))
+	if err != nil {
+		return nil, err
+	}
+	markets := make([]models.Market, 0)
+	if err := cursor.All(ctx, &markets); err != nil {
+		return nil, err
+	}
+	return markets, nil
+}

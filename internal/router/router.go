@@ -80,6 +80,9 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 			public.POST("/auth/logout", authH.Logout)
 		}
 
+		public.GET("/markets", market.ListPublic)
+		public.GET("/markets/:id", market.GetPublic)
+
 		public.GET("/products", product.List)
 		public.GET("/products/:id", product.GetOne)
 		public.GET("/products/:id/reviews", review.ListByProduct)
