@@ -13,6 +13,7 @@ type Config struct {
 	JWTSecret string // HMAC secret used to sign/verify auth tokens
 
 	RefreshSessions bool
+	BrowserOrigins  []string
 
 	// Market approval pipeline.
 	ResendAPIKey       string   // Resend API key for transactional email
@@ -30,6 +31,7 @@ func Load() Config {
 		MongoDB:         getEnv("MONGODB_DB", "bakeu"),
 		JWTSecret:       os.Getenv("JWT_SECRET"),
 		RefreshSessions: os.Getenv("AUTH_REFRESH_SESSIONS") == "true",
+		BrowserOrigins:  splitAndTrim(os.Getenv("AUTH_BROWSER_ORIGINS")),
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		EmailFrom:          getEnv("EMAIL_FROM", "Bakeu <onboarding@resend.dev>"),

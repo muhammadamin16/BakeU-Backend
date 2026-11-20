@@ -4,6 +4,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -59,7 +62,46 @@ func (r *report) record(value bson.RawValue, seen map[string]int) {
 	}
 }
 
+type comparison struct {
+	Mongo                      report `json:"mongo"`
+	SQLite                     report `json:"sqlite"`
+	SharedPhones               int    `json:"sharedPhones"`
+	MongoUsersWithSharedPhone  int    `json:"mongoUsersWithSharedPhone"`
+	SQLiteUsersWithSharedPhone int    `json:"sqliteUsersWithSharedPhone"`
+}
+
+func comparePhones(input io.Reader, counts report, mongoPhones map[string]int) (comparison, error) {
+	result := comparison{Mongo: counts}
+	sqlitePhones := make(map[string]int)
+	decoder := json.NewDecoder(input)
+	for {
+		var phone *string
+		err := decoder.Decode(&phone)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return comparison{}, err
+		}
+		valueType, valueBytes, err := bson.MarshalValue(phone)
+		if err != nil {
+			return comparison{}, err
+		}
+		result.SQLite.record(bson.RawValue{Type: valueType, Value: valueBytes}, sqlitePhones)
+	}
+	for phone, users := range sqlitePhones {
+		if mongoUsers := mongoPhones[phone]; mongoUsers > 0 {
+			result.SharedPhones++
+			result.MongoUsersWithSharedPhone += mongoUsers
+			result.SQLiteUsersWithSharedPhone += users
+		}
+	}
+	return result, nil
+}
+
 func main() {
+	compareSQLite := flag.Bool("compare-sqlite", false, "read SQLite phone values as JSON strings or null from stdin")
+	flag.Parse()
 	uri, database := os.Getenv("MONGODB_URI"), os.Getenv("MONGODB_DB")
 	if uri == "" || database == "" {
 		log.Fatal("set MONGODB_URI and MONGODB_DB explicitly")
@@ -86,7 +128,15 @@ func main() {
 	if cursor.Err() != nil {
 		log.Fatal("MongoDB scan incomplete")
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(counts); err != nil {
+	var result any = counts
+	if *compareSQLite {
+		compared, err := comparePhones(os.Stdin, counts, seen)
+		if err != nil {
+			log.Fatal("invalid SQLite phone input")
+		}
+		result = compared
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		log.Fatal("cannot write report")
 	}
 }
