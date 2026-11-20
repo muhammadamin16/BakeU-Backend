@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,11 +27,32 @@ func NewProductHandler(products *repository.ProductRepo, store *storage.Store, m
 }
 
 type productRequest struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Price       float64 `json:"price"`
-	Category    string  `json:"category"`
-	Available   bool    `json:"available"`
+	Variants    *[]models.ProductVariant `json:"variants"`
+	Title       string                   `json:"title"`
+	Description string                   `json:"description"`
+	Price       float64                  `json:"price"`
+	Category    string                   `json:"category"`
+	Available   bool                     `json:"available"`
+}
+
+func (req *productRequest) validVariants() bool {
+	if req.Variants == nil {
+		return true
+	}
+	if len(*req.Variants) > 20 {
+		return false
+	}
+	names := make(map[string]bool)
+	for i, variant := range *req.Variants {
+		variant.Name = strings.TrimSpace(variant.Name)
+		key := strings.ToLower(variant.Name)
+		if key == "" || len([]rune(key)) > 100 || variant.Price <= 0 || names[key] {
+			return false
+		}
+		names[key] = true
+		(*req.Variants)[i] = variant
+	}
+	return true
 }
 
 // Create handles POST /api/products (seller only, approved market only).
@@ -41,6 +63,10 @@ func (h *ProductHandler) Create(c *gin.Context) {
 	var req productRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !req.validVariants() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product variants"})
 		return
 	}
 	if req.Title == "" || req.Price <= 0 {
@@ -63,6 +89,9 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		UpdatedAt:   now,
 	}
 
+	if req.Variants != nil {
+		p.Variants = *req.Variants
+	}
 	if _, err := h.products.Create(c.Request.Context(), p); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create product"})
 		return
@@ -85,6 +114,10 @@ func (h *ProductHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !req.validVariants() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product variants"})
+		return
+	}
 	if req.Title == "" || req.Price <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be > 0"})
 		return
@@ -97,11 +130,16 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	p.Available = req.Available
 	p.UpdatedAt = time.Now().UTC()
 
-	if err := h.products.Update(c.Request.Context(), p); err != nil {
+	updated, err := h.products.UpdateDetails(c.Request.Context(), p, req.Variants)
+	if errors.Is(err, repository.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		return
+	}
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update product"})
 		return
 	}
-	c.JSON(http.StatusOK, p)
+	c.JSON(http.StatusOK, updated)
 }
 
 // Delete handles DELETE /api/products/:id (seller only, owner only). The
@@ -202,14 +240,18 @@ func (h *ProductHandler) UploadImage(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	p.ImageURLs = append(p.ImageURLs, url)
-	if err := h.products.SetImageURLs(ctx, p.ID, p.ImageURLs); err != nil {
+	updated, err := h.products.AppendImage(ctx, p.ID, p.SellerID, url, maxProductImages)
+	if err != nil {
 		// The URL was never persisted, so the stored file would be orphaned.
 		deleteImageByURL(ctx, h.store, url)
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusConflict, gin.H{"error": "product no longer accepts images"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image url"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"imageURLs": p.ImageURLs})
+	c.JSON(http.StatusOK, gin.H{"imageURLs": updated.ImageURLs})
 }
 
 // requireApproved ensures the seller's market is approved before they can

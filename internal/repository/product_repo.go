@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"bakeu/internal/models"
 )
@@ -44,10 +45,30 @@ func (r *ProductRepo) Get(ctx context.Context, id string) (*models.Product, erro
 	return &p, nil
 }
 
-// Update fully overwrites the product document at _id=p.ID.
-func (r *ProductRepo) Update(ctx context.Context, p *models.Product) error {
-	_, err := r.products.ReplaceOne(ctx, bson.M{"_id": p.ID}, p)
-	return err
+// UpdateDetails patches editable fields while preserving concurrent media and reviews.
+func (r *ProductRepo) UpdateDetails(ctx context.Context, p *models.Product, variants *[]models.ProductVariant) (*models.Product, error) {
+	fields := bson.M{"title": p.Title, "description": p.Description, "price": p.Price,
+		"category": p.Category, "available": p.Available, "updatedAt": p.UpdatedAt}
+	if variants != nil {
+		fields["variants"] = *variants
+	}
+	return r.patch(ctx, bson.M{"_id": p.ID, "sellerId": p.SellerID}, bson.M{"$set": fields})
+}
+
+func (r *ProductRepo) patch(ctx context.Context, filter, update any) (*models.Product, error) {
+	var product models.Product
+	err := r.products.FindOneAndUpdate(ctx, filter, update,
+		options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&product)
+	if isNotFound(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if product.ImageURLs == nil {
+		product.ImageURLs = []string{}
+	}
+	return &product, nil
 }
 
 // Delete removes a product document.
@@ -114,13 +135,15 @@ func contains(xs []string, s string) bool {
 	return false
 }
 
-// SetImageURLs updates only the imageURLs (and updatedAt) of a product.
-func (r *ProductRepo) SetImageURLs(ctx context.Context, id string, urls []string) error {
-	_, err := r.products.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$set": bson.M{
-			"imageURLs": urls,
-			"updatedAt": time.Now().UTC(),
-		},
-	})
-	return err
+// AppendImage checks the cap and appends the image in one update.
+func (r *ProductRepo) AppendImage(ctx context.Context, id, sellerID, url string, limit int) (*models.Product, error) {
+	filter := bson.M{"_id": id, "sellerId": sellerID,
+		"$expr": bson.M{"$lt": bson.A{
+			bson.M{"$size": bson.M{"$ifNull": bson.A{"$imageURLs", bson.A{}}}}, limit,
+		}},
+	}
+	return r.patch(ctx, filter, []bson.M{{"$set": bson.M{
+		"updatedAt": time.Now().UTC(),
+		"imageURLs": bson.M{"$concatArrays": bson.A{bson.M{"$ifNull": bson.A{"$imageURLs", bson.A{}}}, bson.A{url}}},
+	}}})
 }

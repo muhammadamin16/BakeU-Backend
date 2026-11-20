@@ -1,8 +1,12 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,10 +80,10 @@ func TestPublicMarketsReadFromMongoDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	patch := func(userID, body string, want int) {
+	authorized := func(method, path, userID, body, contentType string, want int) string {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPatch, "/api/market/mine", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", contentType)
 		if userID != "" {
 			token, err := auth.NewManager("test-secret").Sign(userID)
 			if err != nil {
@@ -90,8 +94,13 @@ func TestPublicMarketsReadFromMongoDB(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != want {
-			t.Fatalf("PATCH by %s returned %d: %s", userID, w.Code, w.Body.String())
+			t.Fatalf("%s %s by %s returned %d: %s", method, path, userID, w.Code, w.Body.String())
 		}
+		return w.Body.String()
+	}
+	// Ownership and HTTP response checks share the same seeded storefronts.
+	patch := func(userID, body string, want int) {
+		authorized(http.MethodPatch, "/api/market/mine", userID, body, "application/json", want)
 	}
 	patch("", `{"name":"Denied"}`, 401)
 	patch("buyer", `{"name":"Denied"}`, 403)
@@ -108,5 +117,38 @@ func TestPublicMarketsReadFromMongoDB(t *testing.T) {
 	if body := get("/api/markets/a", 200); strings.Contains(body, `"lat":`) || strings.Contains(body, `"lng":`) {
 		t.Fatalf("coordinates stayed visible after clearing: %s", body)
 	}
+
+	const metadata = `{"title":"Cake","price":10000,"available":true}`
+	const variants = `{"title":"Cake","price":10000,"available":true,"variants":[{"name":"Large","price":20000}]}`
+	created := authorized("POST", "/api/products", "owner-a", variants, "application/json", 201)
+	var product struct{ ID string }
+	if err := json.Unmarshal([]byte(created), &product); err != nil || product.ID == "" {
+		t.Fatal("expected product ID")
+	}
+	path := "/api/products/" + product.ID
+	var file bytes.Buffer
+	writer := multipart.NewWriter(&file)
+	part, err := writer.CreateFormFile("image", "cake.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(part, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := authorized("POST", path+"/image", "owner-a", file.String(), writer.FormDataContentType(), 200)
+	var media struct{ ImageURLs []string }
+	if err := json.Unmarshal([]byte(uploaded), &media); err != nil || len(media.ImageURLs) != 1 {
+		t.Fatalf("expected image URL: %s", uploaded)
+	}
+	authorized("PUT", path, "owner-a", metadata, "application/json", 200)
+	r = New(db, config.Config{JWTSecret: "test-secret"})
+	body = get("/api/products?seller=owner-a", 200)
+	if !strings.Contains(body, `"name":"Large"`) || !strings.Contains(body, media.ImageURLs[0]) {
+		t.Fatalf("catalog lost product data: %s", body)
+	}
+	get(media.ImageURLs[0], 200)
 
 }
