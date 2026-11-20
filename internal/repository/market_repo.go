@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -109,4 +110,20 @@ func (r *MarketRepo) ListApproved(ctx context.Context, after string, limit int) 
 		return nil, err
 	}
 	return markets, nil
+}
+
+// EditApproved patches the authenticated seller's approved storefront.
+func (r *MarketRepo) EditApproved(ctx context.Context, sellerID string, fields bson.M) (*models.Market, error) {
+	fields["updatedAt"] = time.Now().UTC()
+	var market models.Market
+	err := r.markets.FindOneAndUpdate(ctx,
+		bson.M{"sellerId": sellerID, "status": models.MarketApproved},
+		bson.M{"$set": fields}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&market)
+	if isNotFound(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &market, nil
 }

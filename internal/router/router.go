@@ -131,6 +131,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	sellerJSON.Use(middleware.BodyLimit(jsonBodyLimit))
 	{
 		sellerJSON.GET("/market/mine", market.Mine)
+		sellerJSON.PATCH("/market/mine", market.EditMine)
 
 		sellerJSON.GET("/seller/dashboard", dashboard.Dashboard)
 
