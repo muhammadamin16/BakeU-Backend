@@ -75,3 +75,42 @@ own-contact + account-password proof. Startup does not backfill phone ownership
 or merge accounts. A conflicting proof rolls back its user, binding and challenge
 changes together. Existing production data is never inferred or migrated.
 
+## Confirmed registration and login (opt-in)
+
+Deploy both services first, then configure `AUTH_PHONE_ACCOUNTS=true` and
+`TELEGRAM_BOT_USERNAME` on Go, `GO_ACCOUNTS_ENABLED=true` on the bot, and
+`VITE_GO_PHONE_ACCOUNTS=true` with `VITE_GO_API_URL` on the website. The bot and
+Go share the existing protected bridge credential. Browser mode also requires
+refresh sessions and an exact allowed HTTPS origin/same-site proxy as above.
+Keep these flags false until the coordinated release is reviewed.
+
+`POST /api/auth/phone/start` takes `purpose: register|login` and `phone`.
+Registration also takes a real email, password (8–72 bytes), name, role
+(`customer|seller`), optional address and seller `marketName`. It returns only a
+challenge ID, expiry and Telegram launch URL. No user is created yet.
+The launch payload fits Telegram's 64-character limit.
+
+The private bot checks `contact.user_id === from.id` and sends the owned phone
+and challenge to service-only `POST /api/integrations/telegram/auth/phone/contact`.
+Go issues a six-digit code once, with a ten-minute expiry and five attempts.
+Only the authenticated bot gets the plaintext code; Mongo stores only its digest.
+`POST /api/auth/phone/verify` with `{id, code}` consumes the proof, creates/loads
+the Go UID and binds Telegram in a single transaction, then issues the existing
+Go access/refresh session. Login looks up the proven E.164 field only, never the
+editable contact. A duplicate email/verified phone/binding rolls back the whole
+registration. A seller receives a private `draft` market, not automatic approval.
+The existing multipart `POST /api/market` submits its logo/GPS/details for review.
+
+When enabled, old unverified `/api/auth/signup` returns 409 with the phone-proof
+route. Existing email/password login remains available to prove and link old Go
+accounts; no SQLite user is copied or merged. Frozen accounts cannot log in,
+refresh, read private account routes or execute role-based actions.
+
+Verified locally: concurrent phone claims and registrations, transaction rollback,
+password/contact separation, own-contact bot checks, hashed code storage,
+one-use/replay/attempt limits, shared secure-cookie refresh after router/browser
+reload, seller draft submission with logo and GPS, and private pending markets.
+The browser used real Go and a disposable MongoDB replica set; Telegram transport
+was simulated. Production variables, live Telegram delivery and legacy-data
+migration still require a separately reviewed activation.
+

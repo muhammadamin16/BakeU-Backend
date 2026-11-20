@@ -107,6 +107,19 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session storage unavailable"})
 		return
 	}
+	u, err := h.users.Get(c.Request.Context(), session.UserID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "account lookup unavailable"})
+		return
+	}
+	if !u.Active() {
+		_ = h.sessions.RevokeAll(c.Request.Context(), session.UserID)
+		if c.GetHeader("X-BakeU-Session") == browserSession {
+			setRefreshCookie(c, "", -1)
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": "account is unavailable"})
+		return
+	}
 	h.sendSession(c, http.StatusOK, session, refresh, nil)
 }
 

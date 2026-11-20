@@ -20,17 +20,17 @@ func (r Role) Valid() bool {
 type User struct {
 	VerifiedPhoneE164 string     `bson:"verifiedPhoneE164,omitempty" json:"verifiedPhoneE164,omitempty"`
 	PhoneVerifiedAt   *time.Time `bson:"phoneVerifiedAt,omitempty" json:"phoneVerifiedAt,omitempty"`
-	Status       string    `bson:"status,omitempty" json:"status,omitempty"`
-	Disabled     bool      `bson:"disabled,omitempty" json:"-"`
-	Frozen       bool      `bson:"frozen,omitempty" json:"-"`
-	UID          string    `bson:"_id" json:"uid"`
-	Email        string    `bson:"email" json:"email"`
-	PasswordHash string    `bson:"passwordHash" json:"-"`
-	Role         Role      `bson:"role" json:"role"`
-	Name         string    `bson:"name" json:"name"`
-	Phone        string    `bson:"phone" json:"phone"`
-	Address      string    `bson:"address" json:"address"`
-	CreatedAt    time.Time `bson:"createdAt" json:"createdAt"`
+	Status            string     `bson:"status,omitempty" json:"status,omitempty"`
+	Disabled          bool       `bson:"disabled,omitempty" json:"-"`
+	Frozen            bool       `bson:"frozen,omitempty" json:"-"`
+	UID               string     `bson:"_id" json:"uid"`
+	Email             string     `bson:"email" json:"email"`
+	PasswordHash      string     `bson:"passwordHash" json:"-"`
+	Role              Role       `bson:"role" json:"role"`
+	Name              string     `bson:"name" json:"name"`
+	Phone             string     `bson:"phone" json:"phone"`
+	Address           string     `bson:"address" json:"address"`
+	CreatedAt         time.Time  `bson:"createdAt" json:"createdAt"`
 }
 
 // PhoneVerified identifies a proven account identity, not an editable contact.

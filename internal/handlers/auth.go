@@ -149,5 +149,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	h.guard.Reset(ip, email)
+	if !u.Active() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "account is unavailable"})
+		return
+	}
 	h.issue(c, http.StatusOK, u)
 }

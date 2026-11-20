@@ -22,6 +22,9 @@ func main() {
 	if cfg.JWTSecret == "" {
 		log.Fatal("JWT_SECRET is required")
 	}
+	if cfg.PhoneAccounts && len(cfg.TelegramBridgeToken) < 32 {
+		log.Fatal("AUTH_PHONE_ACCOUNTS requires the protected TELEGRAM_BRIDGE_TOKEN")
+	}
 
 	// Railway (and any orchestrator) signals SIGTERM before killing the
 	// container; shut down gracefully so in-flight requests finish.

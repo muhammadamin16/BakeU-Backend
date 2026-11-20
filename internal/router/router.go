@@ -81,11 +81,24 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	bridge.PATCH("/orders/:id/status", telegram.Transition)
 	bridge.POST("/notifications/claim", telegram.Claim)
 	bridge.POST("/notifications/:id/:action", telegram.LeaseAction)
+	if cfg.PhoneAccounts {
+		phoneAuth := handlers.NewPhoneAuthHandler(authH, telegramRepo, cfg.TelegramBotUsername)
+		phone := r.Group("/api/auth/phone", middleware.BodyLimit(jsonBodyLimit), authH.CheckSessionOrigin)
+		phone.POST("/start", phoneAuth.Start)
+		phone.POST("/verify", phoneAuth.Verify)
+		bridge.POST("/auth/phone/contact", phoneAuth.Contact)
+	}
 	// Public routes (no auth)
 	public := r.Group("/api")
 	public.Use(middleware.BodyLimit(jsonBodyLimit))
 	{
-		public.POST("/auth/signup", authH.CheckSessionOrigin, authH.Signup)
+		public.POST("/auth/signup", authH.CheckSessionOrigin, func(c *gin.Context) {
+			if cfg.PhoneAccounts {
+				c.JSON(409, gin.H{"error": "Подтвердите телефон через /auth/phone/start."})
+				return
+			}
+			authH.Signup(c)
+		})
 		public.POST("/auth/login", authH.CheckSessionOrigin, authH.Login)
 		if cfg.RefreshSessions {
 			public.POST("/auth/refresh", authH.CheckSessionOrigin, authH.Refresh)
@@ -109,7 +122,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 
 	// Authenticated routes
 	authed := r.Group("/api")
-	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.BodyLimit(jsonBodyLimit))
+	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireActive(userRepo), middleware.BodyLimit(jsonBodyLimit))
 	{
 		authed.GET("/me", profile.Me)
 		if cfg.RefreshSessions {

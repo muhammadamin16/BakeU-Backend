@@ -7,6 +7,8 @@ import (
 
 // Config holds all runtime configuration, sourced from environment variables.
 type Config struct {
+	PhoneAccounts       bool
+	TelegramBotUsername string
 	TelegramBridgeToken string
 	TelegramSiteURL     string
 	Port                string // HTTP port to listen on (Cloud Run sets PORT)
@@ -28,6 +30,8 @@ type Config struct {
 // Load reads configuration from the environment, applying sensible defaults.
 func Load() Config {
 	return Config{
+		PhoneAccounts:       os.Getenv("AUTH_PHONE_ACCOUNTS") == "true",
+		TelegramBotUsername: getEnv("TELEGRAM_BOT_USERNAME", "BakeUuzBot"),
 		TelegramBridgeToken: os.Getenv("TELEGRAM_BRIDGE_TOKEN"),
 		TelegramSiteURL:     getEnv("TELEGRAM_SITE_URL", "https://bakeu-website-production.up.railway.app"),
 		Port:                getEnv("PORT", "8080"),

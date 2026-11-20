@@ -32,12 +32,12 @@ func digest(value string) string {
 }
 
 type TelegramBinding struct {
-	VerifiedPhoneE164 string `bson:"verifiedPhoneE164,omitempty" json:"-"`
-	TelegramID  string    `bson:"_id" json:"telegramId"`
-	UserID      string    `bson:"userId" json:"-"`
-	ConfirmedAt time.Time `bson:"confirmedAt" json:"-"`
-	BotStarted  bool      `bson:"botStarted" json:"botStarted"`
-	Blocked     bool      `bson:"blocked" json:"-"`
+	VerifiedPhoneE164 string    `bson:"verifiedPhoneE164,omitempty" json:"-"`
+	TelegramID        string    `bson:"_id" json:"telegramId"`
+	UserID            string    `bson:"userId" json:"-"`
+	ConfirmedAt       time.Time `bson:"confirmedAt" json:"-"`
+	BotStarted        bool      `bson:"botStarted" json:"botStarted"`
+	Blocked           bool      `bson:"blocked" json:"-"`
 }
 type LinkChallenge struct {
 	ID         string      `bson:"_id"`
@@ -95,7 +95,16 @@ func (r *TelegramRepo) EnsureIndexes(ctx context.Context) error {
 		Options: options.Index().SetName("unique_verified_phone").SetUnique(true).
 			SetPartialFilterExpression(bson.M{"verifiedPhoneE164": bson.M{"$type": "string", "$gt": ""}}),
 	})
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Collection("phone_proofs").Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+		{Keys: bson.D{{Key: "phone", Value: 1}, {Key: "createdAt", Value: -1}}},
+	})
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Collection("telegram_bindings").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)})
 	if err != nil {
 		return err
@@ -189,13 +198,19 @@ func (r *TelegramRepo) Confirm(ctx context.Context, token, uid string) error {
 		// A write on the same user serializes confirmation with profile/freeze changes.
 		now := time.Now().UTC()
 		verifiedAt := u.PhoneVerifiedAt
-		if !u.PhoneVerified() { verifiedAt = &now }
+		if !u.PhoneVerified() {
+			verifiedAt = &now
+		}
 		result, e := r.db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid, "phone": u.Phone, "role": u.Role}, bson.M{"$set": bson.M{"telegramProofAt": now, "verifiedPhoneE164": ch.Phone, "phoneVerifiedAt": verifiedAt}})
-		if isDuplicate(e) { return nil, ErrConflict }
+		if isDuplicate(e) {
+			return nil, ErrConflict
+		}
 		if e != nil {
 			return nil, e
 		}
-		if result.MatchedCount != 1 { return nil, ErrConflict }
+		if result.MatchedCount != 1 {
+			return nil, ErrConflict
+		}
 
 		var previous TelegramBinding
 		e = r.db.Collection("telegram_bindings").FindOne(ctx, bson.M{"_id": ch.TelegramID}).Decode(&previous)
