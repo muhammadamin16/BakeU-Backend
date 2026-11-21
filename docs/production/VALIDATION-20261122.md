@@ -72,3 +72,10 @@ The --configured variant succeeded with bot account/order feature flags false;
 no worker, lease or Telegram send was invoked. Current website/bot continuation
 checks:88 integration tests,69 bot tests, build/lint and miniapp config passed;
 see the companion website CONTINUATION-20261122.md for remaining live gates.
+
+Publication: backend source pushed on codex/mongodb-readiness-20261122; the
+companion website/bot branch has the same name. Draft PR creation was attempted
+for both repositories but GitHub API returned Forbidden, so no new PR is claimed.
+Review comparisons (not created PRs):
+https://github.com/muhammadamin16/BakeU-Backend/compare/main...codex/mongodb-readiness-20261122
+https://github.com/muhammadamin16/BakeU.UZ/compare/Amin...codex/mongodb-readiness-20261122
