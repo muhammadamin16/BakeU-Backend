@@ -126,7 +126,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		orderError(c, e)
 		return
 	}
-	if u.Role != models.RoleCustomer {
+	if !u.Role.Valid() {
 		orderError(c, repository.ErrForbidden)
 		return
 	}
@@ -183,6 +183,10 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		}
 		if !p.Available || p.Price < 0 || p.Price > 1e12 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0) {
 			c.JSON(400, gin.H{"error": "Товар недоступен."})
+			return
+		}
+		if p.SellerID == u.UID {
+			c.JSON(403, gin.H{"error": "Нельзя оформить заказ у своего магазина."})
 			return
 		}
 		price, variantName := p.Price, ""
@@ -280,9 +284,8 @@ func (h *OrderHandler) List(c *gin.Context) {
 	ctx := c.Request.Context()
 	placed := []models.Order{}
 	incoming := []models.Order{}
-	if u.Role == models.RoleCustomer {
-		placed, e = h.orders.ListByCustomer(ctx, u.UID)
-	} else {
+	placed, e = h.orders.ListByCustomer(ctx, u.UID)
+	if e == nil && u.Role == models.RoleSeller {
 		incoming, e = h.orders.ListBySeller(ctx, u.UID)
 	}
 	if e != nil {

@@ -55,6 +55,7 @@ type TelegramIdentity struct {
 	BotStarted bool   `json:"botStarted"`
 	ShopID     string `json:"shopId,omitempty"`
 	User       struct {
+		CanBuy bool   `json:"canBuy"`
 		ID     string `json:"id"`
 		Role   string `json:"role"`
 		Status string `json:"status"`
@@ -143,6 +144,7 @@ func (r *TelegramRepo) Identity(ctx context.Context, actor string) (*TelegramIde
 	out.User.ID = u.UID
 	out.User.Status = "active"
 	out.User.Role = "CLIENT"
+	out.User.CanBuy = true
 	if u.Role == models.RoleSeller {
 		out.User.Role = "SELLER"
 		m, e := NewMarketRepo(r.db).GetBySeller(ctx, u.UID)
@@ -195,8 +197,12 @@ func (r *TelegramRepo) Confirm(ctx context.Context, token, uid string) error {
 			return nil, ErrForbidden
 		}
 		if u.Role == models.RoleSeller {
-			if _, e = NewMarketRepo(r.db).GetBySeller(ctx, uid); e != nil {
-				return nil, ErrForbidden
+			if _, e = NewMarketRepo(r.db).GetBySeller(ctx, uid); errors.Is(e, ErrNotFound) {
+				now := time.Now().UTC()
+				_, e = r.db.Collection("markets").InsertOne(ctx, models.Market{ID: bson.NewObjectID().Hex(), SellerID: uid, Status: models.MarketDraft, Phone: ch.Phone, Email: u.Email, Fulfillment: models.FulfillmentPickup, CreatedAt: now, UpdatedAt: now})
+			}
+			if e != nil {
+				return nil, e
 			}
 		}
 		// A write on the same user serializes confirmation with profile/freeze changes.
@@ -327,7 +333,7 @@ func (r *TelegramRepo) Begin(ctx context.Context, id, lease string) (bool, error
 		return false, e
 	}
 	who, e := r.Identity(ctx, n.Recipient)
-	owns := who != nil && (who.User.Role == "CLIENT" && n.Order.CustomerID == who.User.ID || who.User.Role == "SELLER" && n.Order.SellerID == who.User.ID && n.Order.ShopID == who.ShopID)
+	owns := who != nil && (who.User.CanBuy && n.Order.CustomerID == who.User.ID || who.User.Role == "SELLER" && n.Order.SellerID == who.User.ID && n.Order.ShopID == who.ShopID)
 	if e != nil || !owns || who.User.ID != n.UserID {
 		return false, ErrForbidden
 	}

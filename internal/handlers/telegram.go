@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -70,7 +71,7 @@ func (h *TelegramHandler) who(c *gin.Context, role string) (*repository.Telegram
 		c.JSON(401, gin.H{"error": "confirmed account binding required"})
 		return nil, false
 	}
-	if role != "" && who.User.Role != role {
+	if role != "" && who.User.Role != role && !(role == "CLIENT" && who.User.CanBuy) {
 		orderError(c, repository.ErrForbidden)
 		return nil, false
 	}
@@ -91,6 +92,24 @@ func (h *TelegramHandler) Me(c *gin.Context) {
 		return
 	}
 	c.JSON(200, who)
+}
+
+// Diagnostics is service-only and read-only. It contains counts/capabilities,
+// never user records, connection strings, bridge credentials or message bodies.
+func (h *TelegramHandler) Diagnostics(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	transactions, err := h.repo.TransactionsAvailable(ctx)
+	if err != nil {
+		c.JSON(503, gin.H{"code": "DATABASE_UNAVAILABLE", "error": "Database readiness unavailable"})
+		return
+	}
+	counts, err := h.repo.DiagnosticCounts(ctx)
+	if err != nil {
+		c.JSON(503, gin.H{"code": "DATABASE_READ_DENIED", "error": "Database inventory unavailable"})
+		return
+	}
+	c.JSON(200, gin.H{"bridgeVersion": 1, "databaseConnected": true, "transactionsAvailable": transactions, "phoneAccounts": c.GetBool("phoneAccounts"), "refreshSessions": c.GetBool("refreshSessions"), "counts": counts})
 }
 func (h *TelegramHandler) StartLink(c *gin.Context) {
 	actor, ok := h.actor(c)
@@ -245,7 +264,7 @@ func (h *TelegramHandler) Orders(c *gin.Context) {
 	c.JSON(200, gin.H{"orders": orders, "nextPage": next})
 }
 func telegramOwns(who *repository.TelegramIdentity, o *models.Order) bool {
-	return who.User.Role == "CLIENT" && o.CustomerID == who.User.ID || who.User.Role == "SELLER" && o.SellerID == who.User.ID && o.ShopID == who.ShopID
+	return who.User.CanBuy && o.CustomerID == who.User.ID || who.User.Role == "SELLER" && o.SellerID == who.User.ID && o.ShopID == who.ShopID
 }
 func (h *TelegramHandler) Order(c *gin.Context) {
 	who, ok := h.who(c, "")

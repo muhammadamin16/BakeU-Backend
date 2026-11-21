@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+secrets
+.idea
+.DS_Store
+bin
+server
+tmp
+**/*.sqlite*
+**/*.log

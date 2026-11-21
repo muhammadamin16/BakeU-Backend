@@ -135,6 +135,9 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	case existing.Status == models.MarketApproved:
 		c.JSON(http.StatusConflict, gin.H{"error": "your market is already approved"})
 		return
+	case existing.Status == models.MarketSuspended:
+		c.JSON(http.StatusForbidden, gin.H{"error": "Магазин приостановлен. Обратитесь в поддержку."})
+		return
 	}
 
 	logoURL, ok := uploadImageFile(c, h.store, "logo")
@@ -173,6 +176,7 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	}
 
 	// Resubmit: update the existing (pending or rejected) application.
+	previousStatus, previousUpdated := existing.Status, existing.UpdatedAt
 	oldLogoURL := existing.LogoURL
 	existing.Name = name
 	existing.Description = description
@@ -192,8 +196,12 @@ func (h *MarketHandler) Apply(c *gin.Context) {
 	existing.Status = models.MarketPending
 	existing.RejectionReason = ""
 	existing.UpdatedAt = now
-	if err := h.markets.Update(ctx, existing); err != nil {
+	if err := h.markets.UpdateExpected(ctx, existing, previousStatus, previousUpdated); err != nil {
 		deleteImageByURL(ctx, h.store, logoURL)
+		if errors.Is(err, repository.ErrConflict) {
+			orderError(c, err)
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update market"})
 		return
 	}
@@ -292,6 +300,7 @@ func (h *MarketHandler) ReviewDecision(c *gin.Context) {
 		return
 	}
 
+	previousUpdated := m.UpdatedAt
 	decision := c.PostForm("decision")
 	switch decision {
 	case "approve":
@@ -306,7 +315,11 @@ func (h *MarketHandler) ReviewDecision(c *gin.Context) {
 	}
 	m.ReviewedAt = time.Now().UTC()
 	m.UpdatedAt = m.ReviewedAt
-	if err := h.markets.Update(ctx, m); err != nil {
+	if err := h.markets.UpdateExpected(ctx, m, models.MarketPending, previousUpdated); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			c.Data(http.StatusConflict, "text/html; charset=utf-8", []byte("<h1>Application changed. Reload the review page.</h1>"))
+			return
+		}
 		c.Data(http.StatusInternalServerError, "text/html; charset=utf-8", []byte("<h1>Failed to save decision</h1>"))
 		return
 	}

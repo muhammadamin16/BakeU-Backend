@@ -71,11 +71,13 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	}
 	authH := handlers.NewAuthHandler(userRepo, jwtm, loginGuard, refreshSessions, cfg.BrowserOrigins)
 	profile := handlers.NewProfileHandler(userRepo, marketRepo)
+	profile.ConfigureCapabilities(cfg.SellerSelfService, cfg.AdminUserIDs)
 	product := handlers.NewProductHandler(productRepo, imageStore, marketRepo)
 	market := handlers.NewMarketHandler(marketRepo, userRepo, imageStore, mailer,
 		cfg.AdminEmails, cfg.AppBaseURL, cfg.MarketReviewSecret)
 	image := handlers.NewImageHandler(imageStore)
 	cart := handlers.NewCartHandler(cartRepo, productRepo, marketRepo)
+	favorites := handlers.NewFavoritesHandler(repository.NewFavoritesRepo(db), productRepo, marketRepo)
 	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo, userRepo)
 	review := handlers.NewReviewHandler(reviewRepo, orderRepo)
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
@@ -84,6 +86,11 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	telegram := handlers.NewTelegramHandler(telegramRepo, userRepo, orderRepo, marketRepo, productRepo, cfg.TelegramSiteURL)
 	bridge := r.Group("/api/integrations/telegram", handlers.TelegramServiceAuth(cfg.TelegramBridgeToken), middleware.BodyLimit(jsonBodyLimit))
 	bridge.GET("/me", telegram.Me)
+	bridge.GET("/diagnostics", func(c *gin.Context) {
+		c.Set("phoneAccounts", cfg.PhoneAccounts)
+		c.Set("refreshSessions", cfg.RefreshSessions)
+		telegram.Diagnostics(c)
+	})
 	bridge.POST("/link/challenges", telegram.StartLink)
 	bridge.GET("/shop", telegram.Shop)
 	bridge.GET("/shop/products", telegram.Products)
@@ -138,12 +145,19 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireActive(userRepo), middleware.BodyLimit(jsonBodyLimit))
 	{
 		authed.GET("/me", profile.Me)
+		if cfg.SellerSelfService {
+			authed.POST("/market/self-service", market.OpenOwn)
+		}
 		if cfg.RefreshSessions {
 			authed.POST("/auth/logout-all", authH.CheckSessionOrigin, authH.LogoutAll)
 		}
 		authed.POST("/profile", profile.Upsert)
 
 		authed.GET("/cart", cart.Get)
+		authed.GET("/favorites", favorites.Get)
+		authed.PUT("/favorites/:id", favorites.Set)
+		authed.DELETE("/favorites/:id", favorites.Set)
+		authed.DELETE("/favorites", favorites.Clear)
 		authed.POST("/cart/items", cart.AddItem)
 		authed.DELETE("/cart/items/:productId", cart.RemoveItem)
 
@@ -155,12 +169,15 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 
 	// Customer-only routes
 	customer := r.Group("/api")
-	customer.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireRole(userRepo, models.RoleCustomer),
+	customer.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireActive(userRepo),
 		middleware.BodyLimit(jsonBodyLimit))
 	{
 		customer.POST("/orders", order.Checkout)
 		customer.POST("/products/:id/reviews", review.Create)
 	}
+	admin := r.Group("/api/admin", middleware.AuthRequired(jwtm, sessions), handlers.RequireVerifiedAdmin(userRepo, cfg.AdminUserIDs), middleware.BodyLimit(jsonBodyLimit))
+	admin.GET("/markets", market.ListAdmin)
+	admin.PATCH("/markets/:id/status", market.Moderate)
 
 	// Seller-only routes. The base group carries the auth + role check; two
 	// sub-groups apply different body limits (a single route must not stack two

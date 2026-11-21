@@ -31,6 +31,10 @@ func AuthRequired(jwtm *auth.Manager, sessions *repository.SessionRepo) gin.Hand
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
 		}
+		if expected := c.GetHeader("X-BakeU-Account"); expected != "" && expected != claims.Subject {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"code": "ACCOUNT_CHANGED", "error": "Сессия изменилась. Войдите в аккаунт снова."})
+			return
+		}
 
 		if claims.SessionID != "" {
 			active, err := sessions.Active(c.Request.Context(), claims.SessionID, claims.Subject)

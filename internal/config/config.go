@@ -7,6 +7,8 @@ import (
 
 // Config holds all runtime configuration, sourced from environment variables.
 type Config struct {
+	SellerSelfService   bool
+	AdminUserIDs        []string
 	PhoneAccounts       bool
 	TelegramBotUsername string
 	TelegramBridgeToken string
@@ -30,6 +32,8 @@ type Config struct {
 // Load reads configuration from the environment, applying sensible defaults.
 func Load() Config {
 	return Config{
+		SellerSelfService:   os.Getenv("SELLER_SELF_SERVICE") == "true",
+		AdminUserIDs:        splitAndTrim(os.Getenv("ADMIN_USER_IDS")),
 		PhoneAccounts:       os.Getenv("AUTH_PHONE_ACCOUNTS") == "true",
 		TelegramBotUsername: getEnv("TELEGRAM_BOT_USERNAME", "BakeUuzBot"),
 		TelegramBridgeToken: os.Getenv("TELEGRAM_BRIDGE_TOKEN"),

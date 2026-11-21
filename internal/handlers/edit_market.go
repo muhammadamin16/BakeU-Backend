@@ -35,8 +35,8 @@ func (req marketChanges) fields() (bson.M, error) {
 		required bool
 	}{
 		{"name", req.Name, 150, true},
-		{"description", req.Description, 2000, true},
-		{"city", req.City, 100, true},
+		{"description", req.Description, 2000, false},
+		{"city", req.City, 100, false},
 		{"area", req.Area, 100, false},
 		{"address", req.Address, 250, false},
 	} {

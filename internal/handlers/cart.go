@@ -70,6 +70,10 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "product is unavailable"})
 		return
 	}
+	if product.SellerID == middleware.UID(c) {
+		c.JSON(403, gin.H{"error": "Нельзя добавить товар своего магазина."})
+		return
+	}
 	if req.VariantID != "" {
 		found := false
 		for _, variant := range product.Variants {

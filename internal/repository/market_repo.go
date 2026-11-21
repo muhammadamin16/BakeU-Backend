@@ -21,6 +21,21 @@ func NewMarketRepo(db *mongo.Database) *MarketRepo {
 	return &MarketRepo{markets: db.Collection("markets")}
 }
 
+func (r *MarketRepo) ListForAdmin(ctx context.Context, after string) ([]models.Market, error) {
+	filter := bson.M{}
+	if after != "" {
+		filter["_id"] = bson.M{"$gt": after}
+	}
+	cur, err := r.markets.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(101))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	out := []models.Market{}
+	err = cur.All(ctx, &out)
+	return out, err
+}
+
 // Create assigns a new ID and inserts the market.
 func (r *MarketRepo) Create(ctx context.Context, m *models.Market) error {
 	m.ID = bson.NewObjectID().Hex()

@@ -13,8 +13,18 @@ import (
 
 // ProfileHandler serves the current user's profile endpoints.
 type ProfileHandler struct {
-	users   *repository.UserRepo
-	markets *repository.MarketRepo
+	users       *repository.UserRepo
+	markets     *repository.MarketRepo
+	selfService bool
+	adminIDs    map[string]bool
+}
+
+func (h *ProfileHandler) ConfigureCapabilities(selfService bool, ids []string) {
+	h.selfService = selfService
+	h.adminIDs = map[string]bool{}
+	for _, id := range ids {
+		h.adminIDs[id] = true
+	}
 }
 
 func NewProfileHandler(users *repository.UserRepo, markets *repository.MarketRepo) *ProfileHandler {
@@ -40,7 +50,7 @@ func (h *ProfileHandler) Upsert(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	u, err := h.users.UpdateProfile(ctx, uid, req.Name, req.Phone, req.Address)
+	_, err := h.users.UpdateProfile(ctx, uid, req.Name, req.Phone, req.Address)
 	if errors.Is(err, repository.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
 		return
@@ -49,7 +59,7 @@ func (h *ProfileHandler) Upsert(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save profile"})
 		return
 	}
-	c.JSON(http.StatusOK, u)
+	h.Me(c)
 }
 
 // meResponse is the user profile with the seller's market embedded (null for
@@ -57,7 +67,8 @@ func (h *ProfileHandler) Upsert(c *gin.Context) {
 // its fields to the top level, so existing clients keep working.
 type meResponse struct {
 	*models.User
-	Market *models.Market `json:"market"`
+	Market       *models.Market  `json:"market"`
+	Capabilities map[string]bool `json:"capabilities"`
 }
 
 // Me handles GET /api/me — returns the caller's profile plus their market.
@@ -83,5 +94,5 @@ func (h *ProfileHandler) Me(c *gin.Context) {
 			return
 		}
 	}
-	c.JSON(http.StatusOK, meResponse{User: u, Market: market})
+	c.JSON(http.StatusOK, meResponse{User: u, Market: market, Capabilities: map[string]bool{"buy": true, "sell": u.Role == models.RoleSeller, "openShop": h.selfService && u.PhoneVerified() && (market == nil || market.Status == models.MarketDraft), "admin": h.adminIDs[u.UID] && u.PhoneVerified()}})
 }
