@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
 // Health is an unauthenticated liveness probe: the process is up. It must not
@@ -34,13 +33,13 @@ func NewHealthHandler(client *mongo.Client) *HealthHandler {
 func (h *HealthHandler) Ready(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
-	if err := h.client.Ping(ctx, readpref.Primary()); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "error": "database unreachable"})
+	report, err := repository.InspectMongoReadiness(ctx, h.client)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "code": report.Code, "error": "database capability check failed"})
 		return
 	}
-	transactions, err := repository.TransactionsAvailable(ctx, h.client)
-	if err != nil || !transactions {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "code": "MONGO_TRANSACTIONS_REQUIRED", "error": "transaction-capable storage is not ready"})
+	if !report.Ready {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "code": "MONGO_TRANSACTIONS_REQUIRED", "reason": report.Code, "error": "transaction-capable storage is not ready"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

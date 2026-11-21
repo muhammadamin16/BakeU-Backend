@@ -99,9 +99,9 @@ func (h *TelegramHandler) Me(c *gin.Context) {
 func (h *TelegramHandler) Diagnostics(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
-	transactions, err := h.repo.TransactionsAvailable(ctx)
+	storage, err := h.repo.StorageReadiness(ctx)
 	if err != nil {
-		c.JSON(503, gin.H{"code": "DATABASE_UNAVAILABLE", "error": "Database readiness unavailable"})
+		c.JSON(503, gin.H{"code": storage.Code, "storage": storage, "error": "Database readiness unavailable"})
 		return
 	}
 	counts, err := h.repo.DiagnosticCounts(ctx)
@@ -109,7 +109,7 @@ func (h *TelegramHandler) Diagnostics(c *gin.Context) {
 		c.JSON(503, gin.H{"code": "DATABASE_READ_DENIED", "error": "Database inventory unavailable"})
 		return
 	}
-	c.JSON(200, gin.H{"bridgeVersion": 1, "databaseConnected": true, "transactionsAvailable": transactions, "phoneAccounts": c.GetBool("phoneAccounts"), "refreshSessions": c.GetBool("refreshSessions"), "counts": counts})
+	c.JSON(200, gin.H{"bridgeVersion": 1, "databaseConnected": true, "transactionsAvailable": storage.Ready, "storage": storage, "phoneAccounts": c.GetBool("phoneAccounts"), "refreshSessions": c.GetBool("refreshSessions"), "counts": counts})
 }
 func (h *TelegramHandler) StartLink(c *gin.Context) {
 	actor, ok := h.actor(c)

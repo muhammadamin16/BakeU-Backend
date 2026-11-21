@@ -9,15 +9,8 @@ import (
 // TransactionsAvailable inspects topology without a write or transaction probe.
 // A successful ping on a standalone Railway Mongo instance is not sufficient.
 func TransactionsAvailable(ctx context.Context, client *mongo.Client) (bool, error) {
-	var hello struct {
-		SetName  string `bson:"setName"`
-		Message  string `bson:"msg"`
-		Sessions *int32 `bson:"logicalSessionTimeoutMinutes"`
-	}
-	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err != nil {
-		return false, err
-	}
-	return hello.Sessions != nil && (hello.SetName != "" || hello.Message == "isdbgrid"), nil
+	report, err := InspectMongoReadiness(ctx, client)
+	return report.Ready, err
 }
 
 func (r *TelegramRepo) DiagnosticCounts(ctx context.Context) (map[string]int64, error) {
@@ -41,4 +34,8 @@ func (r *TelegramRepo) DiagnosticCounts(ctx context.Context) (map[string]int64, 
 
 func (r *TelegramRepo) TransactionsAvailable(ctx context.Context) (bool, error) {
 	return TransactionsAvailable(ctx, r.db.Client())
+}
+
+func (r *TelegramRepo) StorageReadiness(ctx context.Context) (MongoReadiness, error) {
+	return InspectMongoReadiness(ctx, r.db.Client())
 }
