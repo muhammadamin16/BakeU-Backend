@@ -1,5 +1,11 @@
 # Legacy account inventory and migration gates
 
+22 November status: the owner reports a44 MB Railway Mongo backup whose restore
+has not been verified, and standalone Mongo with no RS_SEEDS. See
+[MONGODB_READINESS.md](MONGODB_READINESS.md). Actual production inventories,
+backup checksums and restored counts are still unavailable. Do not use the
+synthetic report below as production evidence or activate identity migration.
+
 No production import or automatic claim is shipped or executed. The commands below
 read **consistent backup copies**; output contains personal data, is created 0600,
 and must stay outside Git, logs, frontend assets and shared support messages.

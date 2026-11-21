@@ -1,5 +1,11 @@
 # Backend production activation gate
 
+22 November continuation: the owner confirmed standalone MongoDB and absent
+RS_SEEDS/RS_ENABLED/RS_NAME/RS_KEY in the mongo-ha image. Start with
+[MONGODB_READINESS.md](MONGODB_READINESS.md): it contains the image-specific,
+backup-first same-volume plan. The owner's44 MB backup is **not restore-verified**.
+Do not enable phone cutover, self-service or a production migration yet.
+
 The complete cross-service variable matrix, precise activation order, website
 proxy setup, bot root-directory settings, manual verification and rollback are
 maintained with the website/bot source:

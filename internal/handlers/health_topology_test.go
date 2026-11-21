@@ -38,7 +38,7 @@ func TestReachableStandaloneMongoIsNotTransactionReady(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/readyz", nil))
-	if w.Code != 503 || !strings.Contains(w.Body.String(), "MONGO_TRANSACTIONS_REQUIRED") {
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "MONGO_TRANSACTIONS_REQUIRED") || !strings.Contains(w.Body.String(), "MONGO_STANDALONE") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

@@ -1,5 +1,11 @@
 # BakeU Railway staging
 
+This is the earlier, separately named staging environment guide. Its example
+project/service names are not the owner's currently confirmed production Mongo
+service. For production `mongodb.railway.internal` and the backup-first
+mongo-ha conversion plan, use [production/MONGODB_READINESS.md](production/MONGODB_READINESS.md).
+Do not apply this guide's example URI, flags or deployment order to production.
+
 Select the staging Environment named stading. Confirm that mongo is the intended PRIMARY member of rs0 and that the old MongoDB-1_Wh service is left untouched. Choose its data volume and backup before any deployment. Use Railway's private address discovery to verify the advertised member hostname from the Backend service.
 
 | Service | Variable | Example | Required | Purpose |
