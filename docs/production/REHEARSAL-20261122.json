@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "dataSource": "disposable_fixtures_only",
+  "image": "ghcr.io/railwayapp-templates/mongo-ha/mongo@sha256:3acae065fa9c725197cfcc721fb3d2160b2972924b08bba71617215ffd8ca802",
+  "templateWrapperTested": true,
+  "manualReplicaInitiation": false,
+  "backupBytes": 1357,
+  "backupSHA256": "4dfa8a0175c9053baf28406a827fdd7c546e2656819ce5b82976aa9f38b524da",
+  "restoreVerified": true,
+  "authenticationVerified": true,
+  "anonymousReadsDenied": true,
+  "originalVolumeReused": true,
+  "originalDocumentsPreserved": true,
+  "indexesPreservedOnConversion": true,
+  "transactionCommitAndAbortVerified": true,
+  "goHealthHTTP": 200,
+  "goReadinessHTTP": 200,
+  "elapsedMs": 47788,
+  "productionTouched": false
+}
