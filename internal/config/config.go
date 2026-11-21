@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strings"
 )
@@ -35,8 +36,8 @@ func Load() Config {
 		TelegramBridgeToken: os.Getenv("TELEGRAM_BRIDGE_TOKEN"),
 		TelegramSiteURL:     getEnv("TELEGRAM_SITE_URL", "https://bakeu-website-production.up.railway.app"),
 		Port:                getEnv("PORT", "8080"),
-		MongoURI:            getEnv("MONGODB_URI", "mongodb://localhost:27017"),
-		MongoDB:             getEnv("MONGODB_DB", "bakeu"),
+		MongoURI:            strings.TrimSpace(os.Getenv("MONGODB_URI")),
+		MongoDB:             strings.TrimSpace(os.Getenv("MONGODB_DB")),
 		JWTSecret:           os.Getenv("JWT_SECRET"),
 		RefreshSessions:     os.Getenv("AUTH_REFRESH_SESSIONS") == "true",
 		BrowserOrigins:      splitAndTrim(os.Getenv("AUTH_BROWSER_ORIGINS")),
@@ -47,6 +48,20 @@ func Load() Config {
 		AppBaseURL:         getEnv("APP_BASE_URL", "http://localhost:8080"),
 		MarketReviewSecret: getEnv("MARKET_REVIEW_SECRET", os.Getenv("JWT_SECRET")),
 	}
+}
+
+// ValidateMongoConfig fails before the server attempts to connect.
+func (c Config) ValidateMongoConfig() error {
+	if c.MongoURI == "" {
+		return errors.New("MONGODB_URI is required; set it explicitly")
+	}
+	if !strings.HasPrefix(c.MongoURI, "mongodb://") && !strings.HasPrefix(c.MongoURI, "mongodb+srv://") {
+		return errors.New("MONGODB_URI must use mongodb:// or mongodb+srv://")
+	}
+	if strings.TrimSpace(c.MongoDB) == "" {
+		return errors.New("MONGODB_DB must name the intended database")
+	}
+	return nil
 }
 
 // splitAndTrim splits a comma-separated env value into trimmed, non-empty parts.

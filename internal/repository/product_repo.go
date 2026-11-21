@@ -87,6 +87,10 @@ func (r *ProductRepo) Delete(ctx context.Context, id string) error {
 // non-nil, only products from those sellers are returned (used to hide products
 // of bakeries whose market is not approved); an empty slice yields no products.
 func (r *ProductRepo) List(ctx context.Context, category, sellerID, search string, restrictToSellers []string) ([]models.Product, error) {
+	return r.ListPage(ctx, category, sellerID, search, restrictToSellers, "", 0)
+}
+
+func (r *ProductRepo) ListPage(ctx context.Context, category, sellerID, search string, restrictToSellers []string, after string, limit int) ([]models.Product, error) {
 	filter := bson.M{}
 	if category != "" {
 		filter["category"] = category
@@ -109,7 +113,14 @@ func (r *ProductRepo) List(ctx context.Context, category, sellerID, search strin
 		filter["title"] = bson.M{"$regex": regexp.QuoteMeta(search), "$options": "i"}
 	}
 
-	cur, err := r.products.Find(ctx, filter)
+	find := options.Find()
+	if limit > 0 {
+		if after != "" {
+			filter["_id"] = bson.M{"$gt": after}
+		}
+		find.SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(limit))
+	}
+	cur, err := r.products.Find(ctx, filter, find)
 	if err != nil {
 		return nil, err
 	}
