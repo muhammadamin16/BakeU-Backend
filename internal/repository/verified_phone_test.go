@@ -111,4 +111,24 @@ func TestVerifiedPhoneOwnershipRealMongo(t *testing.T) {
 	if err := repo.Confirm(ctx, again, proven.UID); err != nil {
 		t.Fatal(err)
 	}
+	// An existing Go seller without a shop can prove the account and receive a
+	// private draft. Proof must not approve a storefront or replace its owner.
+	seller := &models.User{Email: "legacy-seller@test.invalid", Role: models.RoleSeller, Phone: "+998901234568"}
+	if err := users.Create(ctx, seller); err != nil {
+		t.Fatal(err)
+	}
+	proof, _, err := repo.Challenge(ctx, "404", seller.Phone, models.RoleSeller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Confirm(ctx, proof, seller.UID); err != nil {
+		t.Fatal(err)
+	}
+	shop, err := NewMarketRepo(db).GetBySeller(ctx, seller.UID)
+	if err != nil || shop.SellerID != seller.UID || shop.Status != models.MarketDraft {
+		t.Fatal("seller proof failed or auto-approved a shop")
+	}
+	if who, err := repo.Identity(ctx, "404"); err != nil || who == nil || who.User.ID != seller.UID || who.ShopID != shop.ID {
+		t.Fatal("seller proof cannot open its own draft")
+	}
 }

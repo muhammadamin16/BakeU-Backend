@@ -6,15 +6,16 @@ import "time"
 type MarketStatus string
 
 const (
-	MarketDraft    MarketStatus = "draft"
-	MarketPending  MarketStatus = "pending"
-	MarketApproved MarketStatus = "approved"
-	MarketRejected MarketStatus = "rejected"
+	MarketDraft     MarketStatus = "draft"
+	MarketPending   MarketStatus = "pending"
+	MarketApproved  MarketStatus = "approved"
+	MarketRejected  MarketStatus = "rejected"
+	MarketSuspended MarketStatus = "suspended"
 )
 
 // Valid reports whether s is a known market status.
 func (s MarketStatus) Valid() bool {
-	return s == MarketDraft || s == MarketPending || s == MarketApproved || s == MarketRejected
+	return s == MarketDraft || s == MarketPending || s == MarketApproved || s == MarketRejected || s == MarketSuspended
 }
 
 // Fulfillment describes how a bakery hands orders to customers.
