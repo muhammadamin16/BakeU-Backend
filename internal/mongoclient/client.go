@@ -4,7 +4,7 @@ package mongoclient
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -26,19 +26,26 @@ type Clients struct {
 // New connects to MongoDB, verifies the connection with a ping, and ensures the
 // indexes the app relies on exist.
 func New(ctx context.Context, cfg config.Config) (*Clients, error) {
+	if err := cfg.ValidateMongoConfig(); err != nil {
+		return nil, err
+	}
 	client, err := mongo.Connect(options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
-		return nil, fmt.Errorf("connect mongo: %w", err)
+		return nil, errors.New("MongoDB client configuration is invalid; check MONGODB_URI syntax and DNS")
 	}
 	if err := client.Ping(ctx, readpref.Primary()); err != nil {
 		_ = client.Disconnect(ctx)
-		return nil, fmt.Errorf("ping mongo: %w", err)
+		var command mongo.CommandError
+		if errors.As(err, &command) && (command.Code == 18 || command.Code == 13) {
+			return nil, errors.New("MongoDB authentication or authorization failed; check the account and authSource")
+		}
+		return nil, errors.New("MongoDB primary is unreachable or authentication failed; check private networking, replicaSet, TLS and credentials")
 	}
 
 	db := client.Database(cfg.MongoDB)
 	if err := ensureIndexes(ctx, db); err != nil {
 		_ = client.Disconnect(ctx)
-		return nil, fmt.Errorf("ensure indexes: %w", err)
+		return nil, errors.New("cannot ensure MongoDB indexes; check database permissions and unique-index conflicts")
 	}
 
 	if cfg.RefreshSessions {
@@ -48,13 +55,13 @@ func New(ctx context.Context, cfg config.Config) (*Clients, error) {
 		})
 		if err != nil {
 			_ = client.Disconnect(ctx)
-			return nil, fmt.Errorf("ensure session indexes: %w", err)
+			return nil, errors.New("cannot ensure MongoDB session indexes; check database permissions and unique-index conflicts")
 		}
 	}
 
 	if err := repository.NewTelegramRepo(db).EnsureIndexes(ctx); err != nil {
 		_ = client.Disconnect(ctx)
-		return nil, fmt.Errorf("ensure Telegram indexes: %w", err)
+		return nil, errors.New("cannot ensure MongoDB Telegram indexes; check database permissions and unique-index conflicts")
 	}
 	return &Clients{Client: client, DB: db}, nil
 }

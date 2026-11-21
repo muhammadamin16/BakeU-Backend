@@ -151,4 +151,20 @@ func TestPublicMarketsReadFromMongoDB(t *testing.T) {
 	}
 	get(media.ImageURLs[0], 200)
 
+	authorized("POST", "/api/products", "owner-a", `{"title":"Bread","price":5000,"available":true}`, "application/json", 201)
+	var page struct {
+		Items []struct{ ID string }
+		Next  string
+	}
+	if err := json.Unmarshal([]byte(get("/api/products?seller=owner-a&limit=1", 200)), &page); err != nil ||
+		len(page.Items) != 1 || page.Next != page.Items[0].ID {
+		t.Fatalf("unexpected product page: %+v, %v", page, err)
+	}
+	firstID := page.Next
+	if err := json.Unmarshal([]byte(get("/api/products?seller=owner-a&limit=1&after="+firstID, 200)), &page); err != nil ||
+		len(page.Items) != 1 || page.Items[0].ID == firstID || page.Next != "" {
+		t.Fatalf("unexpected next product page: %+v, %v", page, err)
+	}
+	get("/api/products?limit=101", 400)
+
 }

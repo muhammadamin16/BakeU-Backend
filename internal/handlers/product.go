@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -199,6 +200,19 @@ func (h *ProductHandler) Delete(c *gin.Context) {
 // List handles GET /api/products (public). Supports ?category=, ?seller=, ?q=.
 // Only products from bakeries with an approved market are returned.
 func (h *ProductHandler) List(c *gin.Context) {
+	limit := 0
+	after := c.Query("after")
+	if raw, paged := c.GetQuery("limit"); paged || after != "" {
+		if !paged {
+			raw = "50"
+		}
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 || len(after) > 128 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product pagination"})
+			return
+		}
+	}
 	ctx := c.Request.Context()
 	approved, err := h.markets.ApprovedSellerIDs(ctx)
 	if err != nil {
@@ -208,12 +222,16 @@ func (h *ProductHandler) List(c *gin.Context) {
 	if approved == nil {
 		approved = []string{}
 	}
-	products, err := h.products.List(
+	fetchLimit := 0
+	if limit > 0 {
+		fetchLimit = limit + 1
+	}
+	products, err := h.products.ListPage(
 		ctx,
 		c.Query("category"),
 		c.Query("seller"),
 		c.Query("q"),
-		approved,
+		approved, after, fetchLimit,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list products"})
@@ -221,6 +239,15 @@ func (h *ProductHandler) List(c *gin.Context) {
 	}
 	if products == nil {
 		products = []models.Product{}
+	}
+	if limit > 0 {
+		next := ""
+		if len(products) > limit {
+			products = products[:limit]
+			next = products[limit-1].ID
+		}
+		c.JSON(http.StatusOK, gin.H{"items": products, "next": next})
+		return
 	}
 	c.JSON(http.StatusOK, products)
 }
