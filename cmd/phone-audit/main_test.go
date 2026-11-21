@@ -31,11 +31,12 @@ func TestComparePhones(t *testing.T) {
 	input := strings.NewReader("\"901234567\"\n\"+998901234567\"\nnull\n\"invalid\"\n\"+12025550123\"\n")
 	got, err := comparePhones(input, report{Users: 3}, map[string]int{
 		"+998901234567": 2, "+998911234567": 1,
-	})
+	}, map[string]int{"+998901234567": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := comparison{
+		SQLiteMissingOrInvalid: 2, SQLiteConflictReview: 2, SQLiteNeedsOwnerProof: 1, SQLiteMatchesVerifiedMongo: 2,
 		Mongo:        report{Users: 3},
 		SQLite:       report{Users: 5, Missing: 1, Invalid: 1, NeedsNormalization: 1, CollisionGroups: 1, UsersInCollision: 2},
 		SharedPhones: 1, MongoUsersWithSharedPhone: 2, SQLiteUsersWithSharedPhone: 2,
@@ -43,7 +44,7 @@ func TestComparePhones(t *testing.T) {
 	if got != want {
 		t.Fatalf("comparison = %+v; want %+v", got, want)
 	}
-	if _, err := comparePhones(strings.NewReader("{"), report{}, nil); err == nil {
+	if _, err := comparePhones(strings.NewReader("{"), report{}, nil, nil); err == nil {
 		t.Fatal("expected malformed input to fail")
 	}
 }

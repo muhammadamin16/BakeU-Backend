@@ -20,3 +20,11 @@ node scripts/stream-sqlite-phones.mjs /path/to/backup.sqlite | go run ./cmd/phon
 ```
 
 The export streams raw phone values through the pipe. Do not run it on its own or capture its output in logs. The final report contains only counts for each source and the number of shared normalized values and affected accounts. Use the report only if the entire pipeline succeeds. A shared number is a candidate for review and does not establish that the two accounts have the same owner.
+
+### Dry-run triage before account migration
+
+Use a verified restore of both backups in an isolated environment. Give the audit process a read-only MongoDB identity and check that MONGODB_URI and MONGODB_DB point to the restore. Run the comparison pipeline above with pipefail and save the final aggregate JSON to private storage.
+
+The SQLite outcome counts partition all source rows: sqliteMissingOrInvalid, sqliteConflictReview (duplicate or matching a Mongo contact/verified phone), and sqliteNeedsOwnerProof (no collision found). sqliteMatchesVerifiedMongo is an additional diagnostic and is counted in conflict review. A matching verified Mongo phone does not prove ownership of the SQLite account. None of these counts authorize importing or linking users.
+
+Before proposing any writes, review the conflicts and verify actual ownership, then inventory references by source user ID across SQLite applications and MongoDB markets, products, orders and sessions. Preserve existing IDs and relations. This command only reads both databases and never migrates data. A subsequent write plan, restore rehearsal and owner approval are separate release gates.
