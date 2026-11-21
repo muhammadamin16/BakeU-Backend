@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -374,5 +375,16 @@ func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	c.JSON(200, changed)
 }
 func (h *OrderHandler) Capabilities(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	storage, err := h.orders.StorageReadiness(ctx)
+	if err != nil || !storage.Ready {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Сервис оформления заказов временно недоступен.",
+			"code":  "MONGO_TRANSACTIONS_REQUIRED", "reason": storage.Code,
+		})
+		return
+	}
+
 	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true, "variantSnapshots": true, "cartRevision": true})
 }

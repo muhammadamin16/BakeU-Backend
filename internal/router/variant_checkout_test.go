@@ -82,6 +82,10 @@ func TestVariantCheckoutRealMongo(t *testing.T) {
 	checkout := gin.H{"items": []gin.H{{"productId": id, "variantId": small, "qty": 2, "price": 1}, {"productId": id, "variantId": large, "qty": 1}}, "fulfillment": "pickup", "scheduledAt": future}
 	call(400, "POST", "/api/cart/items", gin.H{"productId": "missing", "qty": 1}, buyerToken, "")
 	call(400, "POST", "/api/cart/items", gin.H{"productId": id, "variantId": "missing", "qty": 1}, buyerToken, "")
+	capabilities := call(200, "GET", "/api/orders/capabilities", nil, buyerToken, "")
+	if capabilities["workflowVersion"] != float64(2) || capabilities["cartRevision"] != true {
+		t.Fatalf("unexpected order capabilities: %+v", capabilities)
+	}
 	initial := call(200, "GET", "/api/cart", nil, buyerToken, "")
 	rev := initial["revision"].(string)
 	// Both devices start with the same revision. Exactly one write can win.

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bakeu/internal/repository"
 	"context"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -31,6 +32,7 @@ func TestReachableStandaloneMongoIsNotTransactionReady(t *testing.T) {
 	r := gin.New()
 	r.GET("/healthz", Health)
 	r.GET("/readyz", NewHealthHandler(client).Ready)
+	r.GET("/capabilities", (&OrderHandler{orders: repository.NewOrderRepo(client.Database("bakeu_readiness_test"))}).Capabilities)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/healthz", nil))
 	if w.Code != 200 {
@@ -41,4 +43,10 @@ func TestReachableStandaloneMongoIsNotTransactionReady(t *testing.T) {
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "MONGO_TRANSACTIONS_REQUIRED") || !strings.Contains(w.Body.String(), "MONGO_STANDALONE") {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/capabilities", nil))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "MONGO_STANDALONE") || strings.Contains(w.Body.String(), "workflowVersion") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+
 }

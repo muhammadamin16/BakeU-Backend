@@ -39,3 +39,8 @@ func (r *TelegramRepo) TransactionsAvailable(ctx context.Context) (bool, error) 
 func (r *TelegramRepo) StorageReadiness(ctx context.Context) (MongoReadiness, error) {
 	return InspectMongoReadiness(ctx, r.db.Client())
 }
+
+// StorageReadiness uses the same MongoDB client as checkout.
+func (r *OrderRepo) StorageReadiness(ctx context.Context) (MongoReadiness, error) {
+	return InspectMongoReadiness(ctx, r.client)
+}
