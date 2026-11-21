@@ -1,10 +1,26 @@
 package models
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
+)
 
 type ProductVariant struct {
+	ID    string  `bson:"id" json:"id"`
 	Name  string  `bson:"name" json:"name"`
 	Price float64 `bson:"price" json:"price"`
+}
+
+// ExposeVariantIDs gives older name-only variants deterministic IDs without a
+// database write on reads. Sellers preserve these IDs when editing a variant.
+func (p *Product) ExposeVariantIDs() {
+	for i := range p.Variants {
+		if p.Variants[i].ID == "" {
+			sum := sha256.Sum256([]byte(p.ID + "\x00" + p.Variants[i].Name))
+			p.Variants[i].ID = hex.EncodeToString(sum[:12])
+		}
+	}
 }
 
 // Product is a bakery item listed by a seller, stored in the products

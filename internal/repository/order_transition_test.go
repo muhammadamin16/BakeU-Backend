@@ -66,3 +66,14 @@ func TestOrderTransitionRejectsStaleStatusAndWrongSeller(t *testing.T) {
 	}
 
 }
+
+func TestV2SnapshotDoesNotReloadCurrentProfiles(t *testing.T) {
+	repo := &OrderRepo{}
+	order := &models.Order{ID: "order", WorkflowVersion: 2, ShopID: "shop", ShopName: "Original shop", BuyerName: "", BuyerPhone: "+998901234567", DeliveryAddress: "Original address", Status: models.OrderPending}
+	if err := repo.Hydrate(context.Background(), order); err != nil {
+		t.Fatal(err)
+	}
+	if order.BuyerName != "" || order.ShopName != "Original shop" || order.Address != "Original address" {
+		t.Fatal("historical snapshot changed")
+	}
+}

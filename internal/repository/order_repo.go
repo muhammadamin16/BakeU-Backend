@@ -18,6 +18,9 @@ const bucketTimezone = "+05:00"
 // activeStatuses are the order statuses that still require seller action.
 var activeStatuses = bson.A{
 	models.OrderPending,
+	models.OrderAccepted,
+	models.OrderReady,
+	models.OrderDelivering,
 	models.OrderPreparing,
 	models.OrderOutForDelivery,
 }
@@ -40,32 +43,22 @@ type TopCustomer struct {
 
 // OrderRepo provides access to the orders collection.
 type OrderRepo struct {
+	db     *mongo.Database
 	client *mongo.Client
 	orders *mongo.Collection
 }
 
 func NewOrderRepo(db *mongo.Database) *OrderRepo {
-	return &OrderRepo{client: db.Client(), orders: db.Collection("orders")}
+	return &OrderRepo{db: db, client: db.Client(), orders: db.Collection("orders")}
 }
 
 // CreateAll assigns IDs and inserts all orders in a single transaction, so a
 // multi-seller checkout either fully succeeds or leaves no orders behind.
 func (r *OrderRepo) CreateAll(ctx context.Context, orders []*models.Order) error {
-	session, err := r.client.StartSession()
-	if err != nil {
-		return err
+	if len(orders) == 0 {
+		return nil
 	}
-	defer session.EndSession(ctx)
-
-	_, err = session.WithTransaction(ctx, func(ctx context.Context) (any, error) {
-		for _, o := range orders {
-			o.ID = bson.NewObjectID().Hex()
-			if _, err := r.orders.InsertOne(ctx, o); err != nil {
-				return nil, err
-			}
-		}
-		return nil, nil
-	})
+	_, err := r.CreateCommitted(ctx, orders[0].CustomerID, randomToken(), RequestHash(orders), orders, nil)
 	return err
 }
 
@@ -74,7 +67,7 @@ func (r *OrderRepo) CreateAll(ctx context.Context, orders []*models.Order) error
 func (r *OrderRepo) HasDeliveredProduct(ctx context.Context, customerID, productID string) (bool, error) {
 	err := r.orders.FindOne(ctx, bson.M{
 		"customerId":      customerID,
-		"status":          models.OrderDelivered,
+		"status":          bson.M{"$in": bson.A{models.OrderDelivered, models.OrderCompleted}},
 		"items.productId": productID,
 	}).Err()
 	if isNotFound(err) {
@@ -132,7 +125,7 @@ func (r *OrderRepo) ListBySeller(ctx context.Context, sellerID string) ([]models
 func (r *OrderRepo) DeliveredRevenueByDay(ctx context.Context, sellerID string, start, end time.Time) ([]DayBucket, error) {
 	return r.bucketByDay(ctx, bson.M{
 		"sellerId":  sellerID,
-		"status":    models.OrderDelivered,
+		"status":    bson.M{"$in": bson.A{models.OrderDelivered, models.OrderCompleted}},
 		"createdAt": bson.M{"$gte": start, "$lt": end},
 	}, bson.M{"$sum": "$total"})
 }
@@ -198,7 +191,7 @@ func (r *OrderRepo) MonthlySummary(ctx context.Context, sellerID string, start, 
 	cur, err := r.orders.Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
 			"sellerId":  sellerID,
-			"status":    models.OrderDelivered,
+			"status":    bson.M{"$in": bson.A{models.OrderDelivered, models.OrderCompleted}},
 			"createdAt": bson.M{"$gte": start, "$lt": end},
 		}}},
 		{{Key: "$facet", Value: bson.M{

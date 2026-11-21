@@ -16,8 +16,14 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if cfg.TelegramBridgeToken != "" && (len(cfg.TelegramBridgeToken) < 32 || cfg.TelegramBridgeToken == cfg.JWTSecret) {
+		log.Fatal("TELEGRAM_BRIDGE_TOKEN must be a separate service secret of at least 32 characters")
+	}
 	if cfg.JWTSecret == "" {
 		log.Fatal("JWT_SECRET is required")
+	}
+	if cfg.PhoneAccounts && len(cfg.TelegramBridgeToken) < 32 {
+		log.Fatal("AUTH_PHONE_ACCOUNTS requires the protected TELEGRAM_BRIDGE_TOKEN")
 	}
 
 	// Railway (and any orchestrator) signals SIGTERM before killing the

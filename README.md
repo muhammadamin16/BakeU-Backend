@@ -117,3 +117,7 @@ current month. Day buckets use Asia/Tashkent (UTC+5).
 - **products** — number of products the seller lists.
 - **monthly** — for the selected month: delivered order count, total revenue, average
   order value, and top customers.
+
+## Telegram orders integration
+
+See [Telegram accounts and shared orders](docs/telegram-orders.md) for the implemented bridge, account proof, nine-state Mongo workflow, idempotent checkout/history, durable notification queue and deployment variables. It uses this same backend/database. Production activation requires matching bot/Go service secrets and the correct website/API URLs; no legacy SQLite users are automatically merged.

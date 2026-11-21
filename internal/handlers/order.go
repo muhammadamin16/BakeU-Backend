@@ -2,217 +2,374 @@ package handlers
 
 import (
 	"errors"
-	"log"
+	"math"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
-
+	"bakeu/internal/identity"
 	"bakeu/internal/middleware"
 	"bakeu/internal/models"
 	"bakeu/internal/repository"
+	"github.com/gin-gonic/gin"
 )
 
-// maxItemQty caps the quantity of a single order line; there is no stock
-// tracking, so this is the only bound on absurd orders.
 const maxItemQty = 1000
 
-// OrderHandler serves checkout, order listing and seller status updates.
 type OrderHandler struct {
 	orders   *repository.OrderRepo
 	carts    *repository.CartRepo
 	products *repository.ProductRepo
 	markets  *repository.MarketRepo
+	users    *repository.UserRepo
 }
 
-func NewOrderHandler(orders *repository.OrderRepo, carts *repository.CartRepo,
-	products *repository.ProductRepo, markets *repository.MarketRepo) *OrderHandler {
-	return &OrderHandler{orders: orders, carts: carts, products: products, markets: markets}
+func NewOrderHandler(o *repository.OrderRepo, c *repository.CartRepo, p *repository.ProductRepo, m *repository.MarketRepo, users ...*repository.UserRepo) *OrderHandler {
+	h := &OrderHandler{orders: o, carts: c, products: p, markets: m}
+	if len(users) > 0 {
+		h.users = users[0]
+	}
+	return h
 }
 
+type deliveryRequest struct {
+	Fulfillment     string              `json:"fulfillment"`
+	DeliveryAddress string              `json:"deliveryAddress"`
+	Location        *models.Coordinates `json:"location"`
+	ScheduledAt     *time.Time          `json:"scheduledAt"`
+	Comment         string              `json:"comment"`
+}
 type checkoutRequest struct {
-	DeliveryAddress string            `json:"deliveryAddress"`
-	Items           []models.CartItem `json:"items"`
+	CartRevision *string `json:"cartRevision,omitempty"`
+	deliveryRequest
+	Items      []models.CartItem          `json:"items"`
+	Deliveries map[string]deliveryRequest `json:"deliveries"`
 }
 
-// Checkout handles POST /api/orders (customer only). The cart lives on the
-// client, so the request carries the items (final summed qty per product). It
-// turns them into one order per seller, snapshotting product title/price.
-// Returns the list of created orders.
+func validKey(key string) bool {
+	if len(key) < 1 || len(key) > 100 {
+		return false
+	}
+	for _, v := range key {
+		if !(v >= 'a' && v <= 'z' || v >= 'A' && v <= 'Z' || v >= '0' && v <= '9' || v == ':' || v == '-' || v == '_') {
+			return false
+		}
+	}
+	return true
+}
+func validateDelivery(d *deliveryRequest, v2 bool, now time.Time) bool {
+	if d.Fulfillment == "" {
+		d.Fulfillment = "delivery"
+	}
+	if d.Fulfillment != "pickup" && d.Fulfillment != "delivery" {
+		return false
+	}
+	d.DeliveryAddress = strings.TrimSpace(d.DeliveryAddress)
+	d.Comment = strings.TrimSpace(d.Comment)
+	if utf8.RuneCountInString(d.Comment) > 1000 || utf8.RuneCountInString(d.DeliveryAddress) > 500 {
+		return false
+	}
+	if d.Fulfillment == "pickup" {
+		d.DeliveryAddress = ""
+		d.Location = nil
+	} else if d.DeliveryAddress == "" {
+		return false
+	}
+	if d.Location != nil && (math.IsNaN(d.Location.Latitude) || math.IsNaN(d.Location.Longitude) || math.IsInf(d.Location.Latitude, 0) || math.IsInf(d.Location.Longitude, 0) || math.Abs(d.Location.Latitude) > 90 || math.Abs(d.Location.Longitude) > 180) {
+		return false
+	}
+	if v2 && (d.ScheduledAt == nil || !d.ScheduledAt.After(now) || d.ScheduledAt.After(now.Add(366*24*time.Hour))) {
+		return false
+	}
+	return true
+}
+func orderError(c *gin.Context, err error) {
+	status := http.StatusServiceUnavailable
+	message := "Сервис заказов временно недоступен."
+	if errors.Is(err, repository.ErrForbidden) {
+		status = 403
+		message = "Недостаточно прав."
+	}
+	if errors.Is(err, repository.ErrConflict) {
+		status = 409
+		message = "Данные изменились. Обновите заказ."
+	}
+	if errors.Is(err, repository.ErrNotFound) {
+		status = 404
+		message = "Заказ не найден."
+	}
+	c.JSON(status, gin.H{"error": message})
+}
+func (h *OrderHandler) current(c *gin.Context) (*models.User, error) {
+	if h.users == nil {
+		return nil, repository.ErrForbidden
+	}
+	u, e := h.users.Get(c.Request.Context(), middleware.UID(c))
+	if e != nil {
+		return nil, e
+	}
+	if !u.Active() {
+		return nil, repository.ErrForbidden
+	}
+	return u, nil
+}
 func (h *OrderHandler) Checkout(c *gin.Context) {
 	var req checkoutRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "Неверные данные заказа."})
 		return
 	}
-	if req.DeliveryAddress == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "deliveryAddress is required"})
+	u, e := h.current(c)
+	if e != nil {
+		orderError(c, e)
 		return
 	}
-	if len(req.Items) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "cart is empty"})
+	if u.Role != models.RoleCustomer {
+		orderError(c, repository.ErrForbidden)
 		return
 	}
-	// Each item costs a product lookup, so bound the list (mirrors maxCartItems).
-	if len(req.Items) > maxCartItems {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "too many items in one order"})
+	if len(req.Items) == 0 || len(req.Items) > maxCartItems {
+		c.JSON(400, gin.H{"error": "Проверьте корзину."})
 		return
 	}
-
+	key := c.GetHeader("Idempotency-Key")
+	v2 := req.Fulfillment != "" || req.ScheduledAt != nil || req.Deliveries != nil
+	if v2 && !validKey(key) {
+		c.JSON(400, gin.H{"error": "Idempotency-Key is required"})
+		return
+	}
+	if key == "" {
+		key = "legacy-" + time.Now().UTC().Format("20060102150405.000000000")
+	}
+	hash := repository.RequestHash(req)
 	ctx := c.Request.Context()
-	uid := middleware.UID(c)
-
-	// Group order items by seller, resolving each product to a price snapshot.
-	itemsBySeller := make(map[string][]models.OrderItem)
-	for _, item := range req.Items {
-		if item.Qty <= 0 || item.Qty > maxItemQty {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid quantity for product: " + item.ProductID})
-			return
-		}
-		p, err := h.products.Get(ctx, item.ProductID)
-		if errors.Is(err, repository.ErrNotFound) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "product no longer available: " + item.ProductID})
-			return
-		}
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load product"})
-			return
-		}
-		if !p.Available {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "product is unavailable: " + p.Title})
-			return
-		}
-		itemsBySeller[p.SellerID] = append(itemsBySeller[p.SellerID], models.OrderItem{
-			ProductID: p.ID,
-			Title:     p.Title,
-			Price:     p.Price,
-			Qty:       item.Qty,
-		})
-	}
-
-	// A product only stays purchasable while its bakery is approved; listings
-	// hide unapproved markets, but checkout must enforce it too.
-	for sellerID := range itemsBySeller {
-		approved, err := h.markets.IsApprovedSeller(ctx, sellerID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check seller"})
-			return
-		}
-		if !approved {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "one of the bakeries is no longer available"})
-			return
-		}
-	}
-
-	now := time.Now().UTC()
-	orders := make([]*models.Order, 0, len(itemsBySeller))
-	for sellerID, items := range itemsBySeller {
-		var total float64
-		for _, it := range items {
-			total += it.Price * float64(it.Qty)
-		}
-		orders = append(orders, &models.Order{
-			CustomerID:      uid,
-			SellerID:        sellerID,
-			Items:           items,
-			Total:           total,
-			Status:          models.OrderPending,
-			DeliveryAddress: req.DeliveryAddress,
-			CreatedAt:       now,
-			UpdatedAt:       &now,
-			History:         []models.OrderEvent{{Status: models.OrderPending, At: now, ActorID: uid}},
-		})
-	}
-
-	// All orders are created in one transaction: a multi-seller checkout either
-	// fully succeeds or fails without leaving partial orders for a retry to
-	// duplicate.
-	if err := h.orders.CreateAll(ctx, orders); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create order"})
+	if previous, err := h.orders.ReplayCheckout(ctx, u.UID, key, hash); err == nil {
+		c.JSON(200, gin.H{"orders": previous})
+		return
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		orderError(c, err)
 		return
 	}
-
-	// The purchase went through; the server-side cart copy is now stale.
-	// Best-effort: a failure here must not fail the checkout.
-	if err := h.carts.Clear(ctx, uid); err != nil {
-		log.Printf("[order] clear cart for %s: %v", uid, err)
+	buyerPhone, e := identity.NormalizePhone(u.Phone)
+	if e != nil {
+		c.JSON(400, gin.H{"error": "Укажите международный телефон в профиле."})
+		return
 	}
-
-	created := make([]models.Order, 0, len(orders))
-	for _, o := range orders {
-		created = append(created, *o)
+	quantities := map[string]int{}
+	lines := map[string]models.CartItem{}
+	for _, item := range req.Items {
+		line := item.ProductID + "\x00" + item.VariantID
+		quantities[line] += item.Qty
+		lines[line] = item
+		if item.ProductID == "" || len(item.ProductID) > 128 || strings.ContainsRune(item.ProductID, '\x00') || len(item.VariantID) > 24 || strings.ContainsRune(item.VariantID, '\x00') || item.Qty < 1 || quantities[line] > maxItemQty {
+			c.JSON(400, gin.H{"error": "Неверное количество товара."})
+			return
+		}
+	}
+	itemsBySeller := map[string][]models.OrderItem{}
+	ids := []string{}
+	for id := range quantities {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		line := lines[id]
+		p, err := h.products.Get(ctx, line.ProductID)
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		if !p.Available || p.Price < 0 || p.Price > 1e12 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0) {
+			c.JSON(400, gin.H{"error": "Товар недоступен."})
+			return
+		}
+		price, variantName := p.Price, ""
+		if line.VariantID != "" {
+			found := false
+			for _, variant := range p.Variants {
+				if variant.ID == line.VariantID {
+					price, variantName, found = variant.Price, variant.Name, true
+					break
+				}
+			}
+			if !found || price <= 0 || price > 1e12 || math.IsNaN(price) || math.IsInf(price, 0) {
+				c.JSON(400, gin.H{"error": "Выбранный вариант товара недоступен."})
+				return
+			}
+		}
+		itemsBySeller[p.SellerID] = append(itemsBySeller[p.SellerID], models.OrderItem{ProductID: p.ID, VariantID: line.VariantID, VariantName: variantName, Title: p.Title, Price: price, Qty: quantities[id]})
+	}
+	sellers := []string{}
+	for seller := range itemsBySeller {
+		sellers = append(sellers, seller)
+	}
+	sort.Strings(sellers)
+	now := time.Now().UTC()
+	orders := []*models.Order{}
+	used := map[string]bool{}
+	for _, seller := range sellers {
+		m, err := h.markets.GetBySeller(ctx, seller)
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		sellerUser, err := h.users.Get(ctx, seller)
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		if !sellerUser.Active() || sellerUser.Role != models.RoleSeller {
+			orderError(c, repository.ErrForbidden)
+			return
+		}
+		if m.Status != models.MarketApproved {
+			c.JSON(400, gin.H{"error": "Магазин сейчас недоступен."})
+			return
+		}
+		d := req.deliveryRequest
+		if req.Deliveries != nil {
+			var found bool
+			d, found = req.Deliveries[m.ID]
+			if !found {
+				c.JSON(400, gin.H{"error": "Укажите получение для каждого магазина."})
+				return
+			}
+			used[m.ID] = true
+		}
+		if !validateDelivery(&d, v2, now) {
+			c.JSON(400, gin.H{"error": "Проверьте адрес, координаты и будущее время получения."})
+			return
+		}
+		if (d.Fulfillment == "pickup" && m.Fulfillment == models.FulfillmentDelivery) || (d.Fulfillment == "delivery" && m.Fulfillment == models.FulfillmentPickup) {
+			c.JSON(400, gin.H{"error": "Магазин не поддерживает выбранный способ получения."})
+			return
+		}
+		total := 0.0
+		for _, item := range itemsBySeller[seller] {
+			total += item.Price * float64(item.Qty)
+		}
+		if total > 1e12 {
+			c.JSON(400, gin.H{"error": "Сумма заказа слишком велика."})
+			return
+		}
+		workflow := 1
+		if v2 {
+			workflow = 2
+		}
+		orders = append(orders, &models.Order{CustomerID: u.UID, SellerID: seller, ShopID: m.ID, ShopName: m.Name, BuyerName: u.Name, BuyerPhone: buyerPhone, Items: itemsBySeller[seller], Total: total, Status: models.OrderPending, DeliveryAddress: d.DeliveryAddress, Fulfillment: d.Fulfillment, Location: d.Location, ScheduledAt: d.ScheduledAt, Comment: d.Comment, CreatedAt: now, WorkflowVersion: workflow})
+	}
+	if len(used) != len(req.Deliveries) {
+		c.JSON(400, gin.H{"error": "Получение указано для постороннего магазина."})
+		return
+	}
+	created, e := h.orders.CreateCommitted(ctx, u.UID, key, hash, orders, req.CartRevision)
+	if e != nil {
+		orderError(c, e)
+		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"orders": created})
 }
-
-// List handles GET /api/orders — returns every order the caller is involved in,
-// whether as the customer who placed it or the seller fulfilling it.
 func (h *OrderHandler) List(c *gin.Context) {
+	u, e := h.current(c)
+	if e != nil {
+		orderError(c, e)
+		return
+	}
 	ctx := c.Request.Context()
-	uid := middleware.UID(c)
-
-	asCustomer, err := h.orders.ListByCustomer(ctx, uid)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list orders"})
+	placed := []models.Order{}
+	incoming := []models.Order{}
+	if u.Role == models.RoleCustomer {
+		placed, e = h.orders.ListByCustomer(ctx, u.UID)
+	} else {
+		incoming, e = h.orders.ListBySeller(ctx, u.UID)
+	}
+	if e != nil {
+		orderError(c, e)
 		return
 	}
-	asSeller, err := h.orders.ListBySeller(ctx, uid)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list orders"})
-		return
+	if placed == nil {
+		placed = []models.Order{}
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"placed":   asCustomer,
-		"incoming": asSeller,
-	})
+	if incoming == nil {
+		incoming = []models.Order{}
+	}
+	for i := range placed {
+		legacyStatus := placed[i].Status
+		if e = h.orders.Hydrate(ctx, &placed[i]); e != nil {
+			orderError(c, e)
+			return
+		}
+		if placed[i].WorkflowVersion < 2 {
+			placed[i].Status = legacyStatus
+		}
+	}
+	for i := range incoming {
+		legacyStatus := incoming[i].Status
+		if e = h.orders.Hydrate(ctx, &incoming[i]); e != nil {
+			orderError(c, e)
+			return
+		}
+		if incoming[i].WorkflowVersion < 2 {
+			incoming[i].Status = legacyStatus
+		}
+	}
+	c.JSON(200, gin.H{"placed": placed, "incoming": incoming})
 }
 
 type statusRequest struct {
-	Status models.OrderStatus `json:"status"`
+	Status          models.OrderStatus `json:"status"`
+	ExpectedStatus  models.OrderStatus `json:"expectedStatus"`
+	ExpectedVersion *int               `json:"expectedVersion"`
 }
 
-// UpdateStatus handles PATCH /api/orders/:id/status (seller only, owner only).
 func (h *OrderHandler) UpdateStatus(c *gin.Context) {
 	var req statusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if c.ShouldBindJSON(&req) != nil || !models.ValidOrderStatus(req.Status) {
+		c.JSON(400, gin.H{"error": "Неверный статус."})
 		return
 	}
-	if !models.ValidOrderStatus(req.Status) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid order status"})
+	u, e := h.current(c)
+	if e != nil {
+		orderError(c, e)
 		return
 	}
+	if u.Role != models.RoleSeller {
+		orderError(c, repository.ErrForbidden)
+		return
+	}
+	if req.ExpectedStatus == "" {
+		o, err := h.orders.Get(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		if o.WorkflowVersion >= 2 {
+			c.JSON(400, gin.H{"error": "expectedStatus and Idempotency-Key are required"})
+			return
+		}
 
-	ctx := c.Request.Context()
-	order, err := h.orders.Get(ctx, c.Param("id"))
-	if errors.Is(err, repository.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		legacy, err := h.orders.TransitionLegacyCommitted(c.Request.Context(), o.ID, u.UID, o.Status, req.Status)
+		if err != nil {
+			orderError(c, err)
+			return
+		}
+		c.JSON(200, legacy)
 		return
 	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load order"})
+	key := c.GetHeader("Idempotency-Key")
+	if !validKey(key) {
+		c.JSON(400, gin.H{"error": "Idempotency-Key is required"})
 		return
 	}
-	if order.SellerID != middleware.UID(c) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "you do not own this order"})
+	changed, e := h.orders.TransitionCommitted(c.Request.Context(), c.Param("id"), u.UID, req.ExpectedStatus, req.Status, key, req.ExpectedVersion)
+	if e != nil {
+		orderError(c, e)
 		return
 	}
-	if !models.CanTransition(order.Status, req.Status) {
-		c.JSON(http.StatusConflict, gin.H{
-			"error": "cannot change status from '" + string(order.Status) + "' to '" + string(req.Status) + "'",
-		})
-		return
-	}
-
-	updated, err := h.orders.Transition(ctx, order.ID, order.SellerID, order.Status, req.Status)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update order"})
-		return
-	}
-	if updated == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "order status changed; reload and try again"})
-		return
-	}
-	c.JSON(http.StatusOK, updated)
+	c.JSON(200, changed)
+}
+func (h *OrderHandler) Capabilities(c *gin.Context) {
+	c.JSON(200, gin.H{"workflowVersion": 2, "idempotency": true, "history": true, "deliveryScheduling": true, "variantSnapshots": true, "cartRevision": true})
 }

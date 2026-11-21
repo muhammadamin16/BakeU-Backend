@@ -3,11 +3,13 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"bakeu/internal/middleware"
 	"bakeu/internal/models"
@@ -43,11 +45,18 @@ func (req *productRequest) validVariants() bool {
 		return false
 	}
 	names := make(map[string]bool)
+	ids := make(map[string]bool)
 	for i, variant := range *req.Variants {
 		variant.Name = strings.TrimSpace(variant.Name)
 		key := strings.ToLower(variant.Name)
-		if key == "" || len([]rune(key)) > 100 || variant.Price <= 0 || names[key] {
+		if key == "" || len([]rune(key)) > 100 || variant.Price <= 0 || variant.Price > 1e12 || math.IsNaN(variant.Price) || math.IsInf(variant.Price, 0) || names[key] {
 			return false
+		}
+		if variant.ID != "" {
+			if _, err := bson.ObjectIDFromHex(variant.ID); err != nil || ids[variant.ID] {
+				return false
+			}
+			ids[variant.ID] = true
 		}
 		names[key] = true
 		(*req.Variants)[i] = variant
@@ -73,7 +82,6 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be > 0"})
 		return
 	}
-
 	now := time.Now().UTC()
 	p := &models.Product{
 		SellerID:    middleware.UID(c),
@@ -129,6 +137,33 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	p.Category = req.Category
 	p.Available = req.Available
 	p.UpdatedAt = time.Now().UTC()
+	if req.Variants != nil {
+		known := make(map[string]bool)
+		byName := make(map[string]string)
+		used := make(map[string]bool)
+		for _, variant := range p.Variants {
+			known[variant.ID] = true
+			byName[strings.ToLower(variant.Name)] = variant.ID
+		}
+		for i, variant := range *req.Variants {
+			if variant.ID != "" && !known[variant.ID] {
+				c.JSON(400, gin.H{"error": "unknown product variant id"})
+				return
+			}
+			if variant.ID == "" {
+				variant.ID = byName[strings.ToLower(variant.Name)]
+				if variant.ID == "" {
+					variant.ID = bson.NewObjectID().Hex()
+				}
+			}
+			if used[variant.ID] {
+				c.JSON(400, gin.H{"error": "duplicate product variant id"})
+				return
+			}
+			used[variant.ID] = true
+			(*req.Variants)[i] = variant
+		}
+	}
 
 	updated, err := h.products.UpdateDetails(c.Request.Context(), p, req.Variants)
 	if errors.Is(err, repository.ErrNotFound) {

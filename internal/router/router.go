@@ -65,15 +65,42 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		cfg.AdminEmails, cfg.AppBaseURL, cfg.MarketReviewSecret)
 	image := handlers.NewImageHandler(imageStore)
 	cart := handlers.NewCartHandler(cartRepo)
-	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo)
+	order := handlers.NewOrderHandler(orderRepo, cartRepo, productRepo, marketRepo, userRepo)
 	review := handlers.NewReviewHandler(reviewRepo, orderRepo)
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
 
+	telegramRepo := repository.NewTelegramRepo(db)
+	telegram := handlers.NewTelegramHandler(telegramRepo, userRepo, orderRepo, marketRepo, productRepo, cfg.TelegramSiteURL)
+	bridge := r.Group("/api/integrations/telegram", handlers.TelegramServiceAuth(cfg.TelegramBridgeToken), middleware.BodyLimit(jsonBodyLimit))
+	bridge.GET("/me", telegram.Me)
+	bridge.POST("/link/challenges", telegram.StartLink)
+	bridge.GET("/shop", telegram.Shop)
+	bridge.GET("/shop/products", telegram.Products)
+	bridge.GET("/orders", telegram.Orders)
+	bridge.GET("/orders/:id", telegram.Order)
+	bridge.PATCH("/orders/:id/status", telegram.Transition)
+	bridge.POST("/notifications/claim", telegram.Claim)
+	bridge.POST("/notifications/:id/:action", telegram.LeaseAction)
+	if cfg.PhoneAccounts {
+		phoneAuth := handlers.NewPhoneAuthHandler(authH, telegramRepo, cfg.TelegramBotUsername)
+		phone := r.Group("/api/auth/phone", middleware.BodyLimit(jsonBodyLimit), authH.CheckSessionOrigin)
+		phone.POST("/start", phoneAuth.Start)
+		phone.POST("/verify", phoneAuth.Verify)
+		phone.POST("/telegram", phoneAuth.Exchange)
+		bridge.POST("/auth/phone/contact", phoneAuth.Contact)
+		bridge.POST("/auth/launch", phoneAuth.Launch)
+	}
 	// Public routes (no auth)
 	public := r.Group("/api")
 	public.Use(middleware.BodyLimit(jsonBodyLimit))
 	{
-		public.POST("/auth/signup", authH.CheckSessionOrigin, authH.Signup)
+		public.POST("/auth/signup", authH.CheckSessionOrigin, func(c *gin.Context) {
+			if cfg.PhoneAccounts {
+				c.JSON(409, gin.H{"error": "Подтвердите телефон через /auth/phone/start."})
+				return
+			}
+			authH.Signup(c)
+		})
 		public.POST("/auth/login", authH.CheckSessionOrigin, authH.Login)
 		if cfg.RefreshSessions {
 			public.POST("/auth/refresh", authH.CheckSessionOrigin, authH.Refresh)
@@ -97,7 +124,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 
 	// Authenticated routes
 	authed := r.Group("/api")
-	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.BodyLimit(jsonBodyLimit))
+	authed.Use(middleware.AuthRequired(jwtm, sessions), middleware.RequireActive(userRepo), middleware.BodyLimit(jsonBodyLimit))
 	{
 		authed.GET("/me", profile.Me)
 		if cfg.RefreshSessions {
@@ -110,6 +137,9 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		authed.DELETE("/cart/items/:productId", cart.RemoveItem)
 
 		authed.GET("/orders", order.List)
+		authed.GET("/orders/capabilities", order.Capabilities)
+		authed.POST("/me/telegram/link/confirm", telegram.ConfirmLink)
+		authed.GET("/me/notifications", telegram.Inbox)
 	}
 
 	// Customer-only routes
