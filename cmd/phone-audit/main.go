@@ -63,6 +63,10 @@ func (r *report) record(value bson.RawValue, seen map[string]int) {
 }
 
 type comparison struct {
+	SQLiteMissingOrInvalid     int    `json:"sqliteMissingOrInvalid"`
+	SQLiteConflictReview       int    `json:"sqliteConflictReview"`
+	SQLiteNeedsOwnerProof      int    `json:"sqliteNeedsOwnerProof"`
+	SQLiteMatchesVerifiedMongo int    `json:"sqliteMatchesVerifiedMongo"`
 	Mongo                      report `json:"mongo"`
 	SQLite                     report `json:"sqlite"`
 	SharedPhones               int    `json:"sharedPhones"`
@@ -70,7 +74,7 @@ type comparison struct {
 	SQLiteUsersWithSharedPhone int    `json:"sqliteUsersWithSharedPhone"`
 }
 
-func comparePhones(input io.Reader, counts report, mongoPhones map[string]int) (comparison, error) {
+func comparePhones(input io.Reader, counts report, mongoPhones, verifiedMongoPhones map[string]int) (comparison, error) {
 	result := comparison{Mongo: counts}
 	sqlitePhones := make(map[string]int)
 	decoder := json.NewDecoder(input)
@@ -89,7 +93,16 @@ func comparePhones(input io.Reader, counts report, mongoPhones map[string]int) (
 		}
 		result.SQLite.record(bson.RawValue{Type: valueType, Value: valueBytes}, sqlitePhones)
 	}
+	result.SQLiteMissingOrInvalid = result.SQLite.Missing + result.SQLite.Invalid
 	for phone, users := range sqlitePhones {
+		if verifiedMongoPhones[phone] > 0 {
+			result.SQLiteMatchesVerifiedMongo += users
+		}
+		if users > 1 || mongoPhones[phone] > 0 || verifiedMongoPhones[phone] > 0 {
+			result.SQLiteConflictReview += users
+		} else {
+			result.SQLiteNeedsOwnerProof += users
+		}
 		if mongoUsers := mongoPhones[phone]; mongoUsers > 0 {
 			result.SharedPhones++
 			result.MongoUsersWithSharedPhone += mongoUsers
@@ -114,7 +127,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cursor, err := client.Database(database).Collection("users").Find(ctx, bson.D{},
-		options.Find().SetProjection(bson.M{"_id": 0, "phone": 1}))
+		options.Find().SetProjection(bson.M{"_id": 0, "phone": 1, "verifiedPhoneE164": 1}))
 	if err != nil {
 		log.Fatal("cannot read MongoDB users")
 	}
@@ -122,15 +135,18 @@ func main() {
 
 	var counts report
 	seen := make(map[string]int)
+	verified := make(map[string]int)
+	var verifiedCounts report
 	for cursor.Next(ctx) {
 		counts.record(cursor.Current.Lookup("phone"), seen)
+		verifiedCounts.record(cursor.Current.Lookup("verifiedPhoneE164"), verified)
 	}
 	if cursor.Err() != nil {
 		log.Fatal("MongoDB scan incomplete")
 	}
 	var result any = counts
 	if *compareSQLite {
-		compared, err := comparePhones(os.Stdin, counts, seen)
+		compared, err := comparePhones(os.Stdin, counts, seen, verified)
 		if err != nil {
 			log.Fatal("invalid SQLite phone input")
 		}
