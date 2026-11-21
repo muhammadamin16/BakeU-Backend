@@ -1,8 +1,10 @@
 package router
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -40,5 +42,23 @@ func TestNewRegistersRoutes(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /healthz = %d, want 200", w.Code)
+	}
+}
+
+func TestReviewCredentialIsNotRecordedInAccessLogs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var output bytes.Buffer
+	original := gin.DefaultWriter
+	gin.DefaultWriter = &output
+	t.Cleanup(func() { gin.DefaultWriter = original })
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(client.Database("bakeu_test"), config.Config{JWTSecret: "test-secret"})
+	req := httptest.NewRequest(http.MethodGet, "/api/market/review/123?token=synthetic-private-value", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(output.String(), "/api/market/review/123") || strings.Contains(output.String(), "synthetic-private-value") {
+		t.Fatal("access log omitted the route or exposed the query credential")
 	}
 }

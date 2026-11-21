@@ -16,11 +16,13 @@ const maxCartItems = 100
 
 // CartHandler serves the customer's shopping cart.
 type CartHandler struct {
-	carts *repository.CartRepo
+	carts    *repository.CartRepo
+	products *repository.ProductRepo
+	markets  *repository.MarketRepo
 }
 
-func NewCartHandler(carts *repository.CartRepo) *CartHandler {
-	return &CartHandler{carts: carts}
+func NewCartHandler(carts *repository.CartRepo, products *repository.ProductRepo, markets *repository.MarketRepo) *CartHandler {
+	return &CartHandler{carts: carts, products: products, markets: markets}
 }
 
 // Get handles GET /api/cart.
@@ -49,7 +51,40 @@ func (h *CartHandler) AddItem(c *gin.Context) {
 		return
 	}
 
-	cart, err := h.carts.Mutate(c.Request.Context(), middleware.UID(c), req.CartRevision, func(cart *models.Cart) error {
+	ctx := c.Request.Context()
+	product, err := h.products.Get(ctx, req.ProductID)
+	if errors.Is(err, repository.ErrNotFound) || err == nil && !product.Available {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "product is unavailable"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "catalog is unavailable"})
+		return
+	}
+	approved, err := h.markets.IsApprovedSeller(ctx, product.SellerID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "catalog is unavailable"})
+		return
+	}
+	if !approved {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "product is unavailable"})
+		return
+	}
+	if req.VariantID != "" {
+		found := false
+		for _, variant := range product.Variants {
+			if variant.ID == req.VariantID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "product variant is unavailable"})
+			return
+		}
+	}
+
+	cart, err := h.carts.Mutate(ctx, middleware.UID(c), req.CartRevision, func(cart *models.Cart) error {
 		for i, item := range cart.Items {
 			if item.ProductID == req.ProductID && item.VariantID == req.VariantID {
 				cart.Items[i].Qty = req.Qty

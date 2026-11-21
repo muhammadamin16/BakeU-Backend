@@ -80,6 +80,8 @@ func TestVariantCheckoutRealMongo(t *testing.T) {
 	}
 	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	checkout := gin.H{"items": []gin.H{{"productId": id, "variantId": small, "qty": 2, "price": 1}, {"productId": id, "variantId": large, "qty": 1}}, "fulfillment": "pickup", "scheduledAt": future}
+	call(400, "POST", "/api/cart/items", gin.H{"productId": "missing", "qty": 1}, buyerToken, "")
+	call(400, "POST", "/api/cart/items", gin.H{"productId": id, "variantId": "missing", "qty": 1}, buyerToken, "")
 	initial := call(200, "GET", "/api/cart", nil, buyerToken, "")
 	rev := initial["revision"].(string)
 	// Both devices start with the same revision. Exactly one write can win.
