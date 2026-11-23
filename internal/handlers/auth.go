@@ -65,7 +65,7 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 	}
 	// Require a plain, parseable address (no display name) so approval emails
 	// can actually be delivered to it later.
-	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
+	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email || strings.HasSuffix(email, phoneAccountEmailSuffix) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid email address"})
 		return
 	}
