@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"bakeu/internal/models"
 	"bakeu/internal/repository"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -18,6 +20,10 @@ type PhoneAuthHandler struct {
 	repo *repository.TelegramRepo
 	bot  string
 }
+
+const phoneAccountEmailSuffix = "@phone.bakeu.invalid"
+
+var errInvalidPhoneCredentials = errors.New("invalid phone signup credentials")
 
 var phoneProofRE = regexp.MustCompile(`^[a-f0-9]{48}$`)
 
@@ -53,18 +59,18 @@ func (h *PhoneAuthHandler) Start(c *gin.Context) {
 	h.auth.guard.RecordFailure(c.ClientIP(), key) // Successful starts also count against request rate.
 	var draft *models.User
 	if req.Purpose == "register" {
-		email := normalizeEmail(req.Email)
-		addr, e := mail.ParseAddress(email)
-		if e != nil || addr.Address != email || len(email) > 254 || !req.Role.Valid() || len(req.Password) < minPasswordLen || len(req.Password) > maxPasswordLen || len(strings.TrimSpace(req.Name)) < 2 || len(req.Name) > 120 || len(req.Address) > 500 || (req.Role == models.RoleSeller && (len(strings.TrimSpace(req.MarketName)) < 2 || len(req.MarketName) > 120)) {
-			c.JSON(400, gin.H{"error": "Проверьте имя, email, пароль (8–72 байт), роль и название магазина."})
+		name, market := strings.TrimSpace(req.Name), strings.TrimSpace(req.MarketName)
+		if !req.Role.Valid() || len([]rune(name)) < 2 || len([]rune(name)) > 120 || len([]rune(req.Address)) > 500 ||
+			(req.Role == models.RoleSeller && (len([]rune(market)) < 2 || len([]rune(market)) > 120)) {
+			c.JSON(400, gin.H{"error": "Проверьте имя, роль и название магазина."})
 			return
 		}
-		hash, e := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if e != nil {
-			c.JSON(503, gin.H{"error": "registration unavailable"})
+		email, hash, err := phoneSignupCredentials(req.Email, req.Password)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "Проверьте email и пароль (8–72 байт)."})
 			return
 		}
-		draft = &models.User{Email: email, PasswordHash: string(hash), Name: strings.TrimSpace(req.Name), Phone: phone, Address: strings.TrimSpace(req.Address), Role: req.Role}
+		draft = &models.User{Email: email, PasswordHash: hash, Name: name, Phone: phone, Address: strings.TrimSpace(req.Address), Role: req.Role}
 	}
 	token, expiry, err := h.repo.StartPhoneProof(c.Request.Context(), req.Purpose, phone, strings.TrimSpace(req.MarketName), draft)
 	if err != nil {
@@ -72,6 +78,21 @@ func (h *PhoneAuthHandler) Start(c *gin.Context) {
 		return
 	}
 	c.JSON(201, gin.H{"id": token, "expiresAt": expiry, "telegramUrl": "https://t.me/" + url.PathEscape(h.bot) + "?start=goauth_" + token})
+}
+
+// Phone-only accounts retain a unique email index key without a usable email or password login.
+func phoneSignupCredentials(email, password string) (string, string, error) {
+	email = normalizeEmail(email)
+	if email == "" && password == "" {
+		return bson.NewObjectID().Hex() + phoneAccountEmailSuffix, "", nil
+	}
+	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email ||
+		len(email) > 254 || strings.HasSuffix(email, phoneAccountEmailSuffix) ||
+		len(password) < minPasswordLen || len(password) > maxPasswordLen {
+		return "", "", errInvalidPhoneCredentials
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return email, string(hash), err
 }
 
 func (h *PhoneAuthHandler) Verify(c *gin.Context) {

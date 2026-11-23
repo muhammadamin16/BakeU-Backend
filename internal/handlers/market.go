@@ -350,7 +350,7 @@ func (h *MarketHandler) notifyAdmins(ctx context.Context, m *models.Market) {
 }
 
 func (h *MarketHandler) notifySeller(ctx context.Context, m *models.Market) {
-	if m.Email == "" {
+	if m.Email == "" || strings.HasSuffix(m.Email, phoneAccountEmailSuffix) {
 		return
 	}
 	var subject string

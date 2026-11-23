@@ -80,7 +80,11 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	}
 	start := func(purpose, phone, email, role string) string {
 		t.Helper()
-		out := expect(201, "POST", "/api/auth/phone/start", gin.H{"purpose": purpose, "phone": phone, "email": email, "password": "test-password-123", "role": role, "name": "Test user", "marketName": "Test bakery"}, "", "")
+		payload := gin.H{"purpose": purpose, "phone": phone, "role": role, "name": "Test user", "marketName": "Test bakery"}
+		if email != "" {
+			payload["email"], payload["password"] = email, "test-password-123"
+		}
+		out := expect(201, "POST", "/api/auth/phone/start", payload, "", "")
 		id := out["id"].(string)
 		u, e := url.Parse(out["telegramUrl"].(string))
 		if e != nil || u.Host != "t.me" || len(u.Query().Get("start")) > 64 || len(id) != 48 {
@@ -160,7 +164,7 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 		t.Fatal("session did not survive restart")
 	}
 	// Concurrent registration for the same proven phone cannot create a second UID.
-	ids := []string{start("register", "+998901234568", "seller-a@test.invalid", "seller"), start("register", "+998901234568", "seller-b@test.invalid", "seller")}
+	ids := []string{start("register", "+998901234568", "", "seller"), start("register", "+998901234568", "", "seller")}
 	codes := []string{contact(ids[0], "+998901234568", "402"), contact(ids[1], "+998901234568", "403")}
 	statuses := make([]int, 2)
 	var wg sync.WaitGroup
