@@ -48,6 +48,12 @@ func New(ctx context.Context, cfg config.Config) (*Clients, error) {
 		return nil, errors.New("cannot ensure MongoDB indexes; check database permissions and unique-index conflicts")
 	}
 
+	if cfg.PhoneAccounts {
+		if err := repository.CheckPhoneEmailIndexes(ctx, db); err != nil {
+			_ = client.Disconnect(ctx)
+			return nil, err
+		}
+	}
 	if cfg.RefreshSessions {
 		_, err := db.Collection("auth_sessions").Indexes().CreateMany(ctx, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "expiresAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
@@ -69,10 +75,7 @@ func New(ctx context.Context, cfg config.Config) (*Clients, error) {
 // ensureIndexes creates the indexes the queries depend on. CreateMany is
 // idempotent, so this is safe to run on every startup.
 func ensureIndexes(ctx context.Context, db *mongo.Database) error {
-	if _, err := db.Collection("users").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	}); err != nil {
+	if err := repository.EnsureOptionalEmailIndex(ctx, db); err != nil {
 		return err
 	}
 	if _, err := db.Collection("products").Indexes().CreateMany(ctx, []mongo.IndexModel{

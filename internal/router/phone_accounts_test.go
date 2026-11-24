@@ -38,7 +38,7 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	if err := repository.NewTelegramRepo(db).EnsureIndexes(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Collection("users").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}); err != nil {
+	if err := repository.EnsureOptionalEmailIndex(ctx, db); err != nil {
 		t.Fatal(err)
 	}
 	const bridge = "test-phone-service-key-distinct-from-jwt-with-32-characters"
@@ -78,9 +78,9 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 		}
 		return out
 	}
-	start := func(purpose, phone, email, role string) string {
+	start := func(purpose, phone, role string) string {
 		t.Helper()
-		out := expect(201, "POST", "/api/auth/phone/start", gin.H{"purpose": purpose, "phone": phone, "email": email, "password": "test-password-123", "role": role, "name": "Test user", "marketName": "Test bakery"}, "", "")
+		out := expect(201, "POST", "/api/auth/phone/start", gin.H{"purpose": purpose, "phone": phone, "role": role, "firstName": "Test", "lastName": "User", "marketName": "Test bakery", "address": "Tashkent street 1", "lat": 41.31, "lng": 69.28}, "", "")
 		id := out["id"].(string)
 		u, e := url.Parse(out["telegramUrl"].(string))
 		if e != nil || u.Host != "t.me" || len(u.Query().Get("start")) > 64 || len(id) != 48 {
@@ -94,7 +94,10 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	}
 	expect(409, "POST", "/api/auth/signup", gin.H{}, "", "")
 	expect(400, "POST", "/api/auth/phone/start", gin.H{"purpose": "register", "phone": "+998901234567", "role": "admin"}, "", "")
-	id := start("register", "90 123 45 67", "buyer@test.invalid", "customer")
+	id := start("register", "90 123 45 67", "customer")
+	if n, _ := db.Collection("markets").CountDocuments(ctx, bson.M{}); n != 0 {
+		t.Fatal("created market before proof")
+	}
 	if n, _ := db.Collection("users").CountDocuments(ctx, bson.M{}); n != 0 {
 		t.Fatal("created user without proof")
 	}
@@ -110,9 +113,30 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	if stored["codeHash"] == code || stored["_id"] == id {
 		t.Fatal("stored raw code or launch token")
 	}
+	wrongBeforeCreation := "000000"
+	if code == wrongBeforeCreation {
+		wrongBeforeCreation = "111111"
+	}
+	expect(403, "POST", "/api/auth/phone/verify", gin.H{"id": id, "code": wrongBeforeCreation}, "", "")
+	if n, _ := db.Collection("users").CountDocuments(ctx, bson.M{}); n != 0 {
+		t.Fatal("wrong code created an account")
+	}
 	status, registered, cookie := call("POST", "/api/auth/phone/verify", gin.H{"id": id, "code": code}, "", "", true, "")
 	if status != 200 || !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "Secure") || registered["refreshToken"] != nil {
 		t.Fatalf("shared browser session not created: %d %v %s", status, registered, cookie)
+	}
+	var created bson.M
+	if err := db.Collection("users").FindOne(ctx, bson.M{}).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := created["email"]; ok {
+		t.Fatal("stored email for phone-only user")
+	}
+	if _, ok := created["passwordHash"]; ok {
+		t.Fatal("stored a password hash for phone-only user")
+	}
+	if registered["user"].(map[string]any)["firstName"] != "Test" {
+		t.Fatal("lost structured name")
 	}
 	token := registered["token"].(string)
 	uid := registered["user"].(map[string]any)["uid"].(string)
@@ -147,7 +171,7 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 		t.Fatal("expired launch ticket accepted")
 	}
 	expect(200, "POST", "/api/profile", gin.H{"name": "Edited", "phone": "+998909999999", "verifiedPhoneE164": "+998909999999"}, token, "")
-	login := start("login", "+998901234567", "", "")
+	login := start("login", "+998901234567", "")
 	loginCode := contact(login, "+998901234567", "401")
 	result := expect(200, "POST", "/api/auth/phone/verify", gin.H{"id": login, "code": loginCode}, "", "")
 	if result["user"].(map[string]any)["uid"] != uid {
@@ -160,7 +184,7 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 		t.Fatal("session did not survive restart")
 	}
 	// Concurrent registration for the same proven phone cannot create a second UID.
-	ids := []string{start("register", "+998901234568", "seller-a@test.invalid", "seller"), start("register", "+998901234568", "seller-b@test.invalid", "seller")}
+	ids := []string{start("register", "+998901234568", "seller"), start("register", "+998901234568", "seller")}
 	codes := []string{contact(ids[0], "+998901234568", "402"), contact(ids[1], "+998901234568", "403")}
 	statuses := make([]int, 2)
 	var wg sync.WaitGroup
@@ -178,14 +202,21 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	if n, _ := db.Collection("users").CountDocuments(ctx, bson.M{}); n != 2 {
 		t.Fatal("partial duplicate signup")
 	}
-	if n, _ := db.Collection("markets").CountDocuments(ctx, bson.M{"status": models.MarketDraft}); n != 1 {
-		t.Fatal("seller draft missing or duplicated")
+	if n, _ := db.Collection("markets").CountDocuments(ctx, bson.M{"status": models.MarketApproved}); n != 1 {
+		t.Fatal("verified seller shop missing or duplicated")
 	}
-	if n, _ := db.Collection("markets").CountDocuments(ctx, bson.M{"status": models.MarketApproved}); n != 0 {
-		t.Fatal("seller auto-approved")
+	if n, _ := db.Collection("markets").CountDocuments(ctx, bson.M{"status": models.MarketDraft}); n != 0 {
+		t.Fatal("seller still requires an application")
+	}
+	var shop models.Market
+	if err := db.Collection("markets").FindOne(ctx, bson.M{}).Decode(&shop); err != nil {
+		t.Fatal(err)
+	}
+	if shop.Latitude == nil || shop.Longitude == nil || *shop.Latitude != 41.31 || *shop.Longitude != 69.28 || shop.Address != "Tashkent street 1" {
+		t.Fatal("registration lost shop location")
 	}
 	// Five incorrect codes lock this proof even when the correct code arrives later.
-	locked := start("login", "+998901234567", "", "")
+	locked := start("login", "+998901234567", "")
 	good := contact(locked, "+998901234567", "401")
 	wrong := "000000"
 	if good == wrong {
@@ -197,19 +228,27 @@ func TestPhoneAccountsRealMongo(t *testing.T) {
 	if got, _, _ := call("POST", "/api/auth/phone/verify", gin.H{"id": locked, "code": good}, "", "", false, ""); got != 429 && got != 409 {
 		t.Fatal("exhausted proof accepted")
 	}
+	expired := start("register", "+998901234569", "customer")
+	expiredCode := contact(expired, "+998901234569", "404")
+	if _, err := db.Collection("phone_proofs").UpdateMany(ctx, bson.M{"phone": "+998901234569"}, bson.M{"$set": bson.M{"expiresAt": time.Now().Add(-time.Second)}}); err != nil {
+		t.Fatal(err)
+	}
+	expect(409, "POST", "/api/auth/phone/verify", gin.H{"id": expired, "code": expiredCode}, "", "")
+	if n, _ := db.Collection("users").CountDocuments(ctx, bson.M{}); n != 2 {
+		t.Fatal("expired proof created an account")
+	}
 	// Freeze blocks password and OTP login even with the right proof.
 	beforeFreeze := expect(200, "POST", "/api/integrations/telegram/auth/launch", gin.H{}, bridge, "401")
 	_, err = db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid}, bson.M{"$set": bson.M{"frozen": true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(403, "POST", "/api/auth/login", gin.H{"email": "buyer@test.invalid", "password": "test-password-123"}, "", "")
 	expect(403, "GET", "/api/me", nil, token, "")
 	expect(403, "GET", "/api/orders", nil, token, "")
 	if status, _, _ := call("POST", "/api/auth/phone/telegram", gin.H{"ticket": beforeFreeze["ticket"]}, "", "", true, ""); status != 403 {
 		t.Fatal("a ticket restored a frozen account")
 	}
-	frozen := start("login", "+998901234567", "", "")
+	frozen := start("login", "+998901234567", "")
 	frozenCode := contact(frozen, "+998901234567", "401")
 	expect(403, "POST", "/api/auth/phone/verify", gin.H{"id": frozen, "code": frozenCode}, "", "")
 }

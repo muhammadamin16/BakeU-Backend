@@ -16,20 +16,21 @@ import (
 // PhoneProof is a pending operation, never a second user/session store. Only the
 // bot receives its one-time code after receiving a Telegram-owned contact.
 type PhoneProof struct {
-	ID         string       `bson:"_id"`
-	Purpose    string       `bson:"purpose"`
-	Phone      string       `bson:"phone"`
-	Draft      *models.User `bson:"draft,omitempty"`
-	MarketName string       `bson:"marketName,omitempty"`
-	TelegramID string       `bson:"telegramId,omitempty"`
-	CodeHash   string       `bson:"codeHash,omitempty"`
-	Attempts   int          `bson:"attempts"`
-	Used       bool         `bson:"used"`
-	CreatedAt  time.Time    `bson:"createdAt"`
-	ExpiresAt  time.Time    `bson:"expiresAt"`
+	ID         string         `bson:"_id"`
+	Purpose    string         `bson:"purpose"`
+	Phone      string         `bson:"phone"`
+	Draft      *models.User   `bson:"draft,omitempty"`
+	Market     *models.Market `bson:"market,omitempty"`
+	Version    int            `bson:"version,omitempty"`
+	TelegramID string         `bson:"telegramId,omitempty"`
+	CodeHash   string         `bson:"codeHash,omitempty"`
+	Attempts   int            `bson:"attempts"`
+	Used       bool           `bson:"used"`
+	CreatedAt  time.Time      `bson:"createdAt"`
+	ExpiresAt  time.Time      `bson:"expiresAt"`
 }
 
-func (r *TelegramRepo) StartPhoneProof(ctx context.Context, purpose, phone, marketName string, draft *models.User) (string, time.Time, error) {
+func (r *TelegramRepo) StartPhoneProof(ctx context.Context, purpose, phone string, draft *models.User, market *models.Market) (string, time.Time, error) {
 	now := time.Now().UTC()
 	n, err := r.db.Collection("phone_proofs").CountDocuments(ctx, bson.M{"phone": phone, "createdAt": bson.M{"$gte": now.Add(-time.Hour)}})
 	if err != nil {
@@ -40,7 +41,7 @@ func (r *TelegramRepo) StartPhoneProof(ctx context.Context, purpose, phone, mark
 	}
 	// 48 hex characters + "goauth_" fits Telegram's 64-character start limit.
 	token := randomToken()[:48]
-	p := PhoneProof{ID: digest(token), Purpose: purpose, Phone: phone, Draft: draft, MarketName: marketName, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+	p := PhoneProof{ID: digest(token), Purpose: purpose, Phone: phone, Draft: draft, Market: market, Version: 2, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
 	_, err = r.db.Collection("phone_proofs").InsertOne(ctx, p)
 	return token, p.ExpiresAt, err
 }
@@ -102,7 +103,7 @@ func (r *TelegramRepo) FinishPhoneProof(ctx context.Context, token, code string)
 		now := time.Now().UTC()
 		var u *models.User
 		if p.Purpose == "register" {
-			if p.Draft == nil || !p.Draft.Role.Valid() {
+			if p.Version != 2 || p.Draft == nil || !p.Draft.Role.Valid() || p.Draft.FirstName == "" || p.Draft.LastName == "" || (p.Draft.Role == models.RoleSeller && (p.Market == nil || p.Market.Latitude == nil || p.Market.Longitude == nil)) {
 				return nil, ErrForbidden
 			}
 			copy := *p.Draft
@@ -113,8 +114,14 @@ func (r *TelegramRepo) FinishPhoneProof(ctx context.Context, token, code string)
 				return nil, err
 			}
 			if u.Role == models.RoleSeller {
-				m := models.Market{ID: bson.NewObjectID().Hex(), SellerID: u.UID, Name: p.MarketName, Phone: p.Phone, Email: u.Email, Address: u.Address, Status: models.MarketDraft, Fulfillment: models.FulfillmentPickup, CreatedAt: now, UpdatedAt: now}
+				m := *p.Market
+				m.ID, m.SellerID, m.Phone = bson.NewObjectID().Hex(), u.UID, p.Phone
+				m.Status, m.Fulfillment = models.MarketApproved, models.FulfillmentPickup
+				m.CreatedAt, m.UpdatedAt, m.ReviewedAt = now, now, now
 				if _, err := r.db.Collection("markets").InsertOne(ctx, m); err != nil {
+					return nil, err
+				}
+				if _, err := r.db.Collection("market_events").InsertOne(ctx, bson.M{"_id": bson.NewObjectID().Hex(), "marketId": m.ID, "actorId": u.UID, "kind": "verified_phone_registration", "at": now}); err != nil {
 					return nil, err
 				}
 			}
@@ -148,7 +155,7 @@ func (r *TelegramRepo) FinishPhoneProof(ctx context.Context, token, code string)
 		if e != nil {
 			return nil, e
 		}
-		consumed, e := proofs.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"used": true}, "$unset": bson.M{"draft": "", "codeHash": ""}})
+		consumed, e := proofs.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"used": true}, "$unset": bson.M{"draft": "", "market": "", "codeHash": ""}})
 		if e != nil {
 			return nil, e
 		}

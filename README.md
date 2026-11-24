@@ -8,7 +8,7 @@ review.
 
 - **Go** + [gin](https://github.com/gin-gonic/gin) — HTTP API
 - **MongoDB** — database (Atlas free M0 tier, or local)
-- **Custom JWT auth** — email/password signup/login, bcrypt-hashed passwords
+- **Go/Mongo account auth** — phone + Telegram own-contact proof, shared JWT/refresh sessions; existing legacy credentials retained
 - **GridFS** — product photos stored in MongoDB
 - **Cloud Run** — deployment
 
@@ -59,6 +59,8 @@ gcloud run deploy bakeu \
 (Store `MONGODB_URI` and `JWT_SECRET` in Secret Manager rather than plain env vars.)
 
 ## Auth
+
+For phone-enabled registration/login, follow [the Telegram phone contract](docs/production/PHONE_ONLY_AUTH.md). The credential examples below are retained for legacy clients; signup is disabled when `AUTH_PHONE_ACCOUNTS=true`.
 
 Sign up or log in to receive a JWT, then send it as `Authorization: Bearer <token>` on
 authenticated routes.
@@ -121,3 +123,7 @@ current month. Day buckets use Asia/Tashkent (UTC+5).
 ## Telegram orders integration
 
 See [Telegram accounts and shared orders](docs/telegram-orders.md) for the implemented bridge, account proof, nine-state Mongo workflow, idempotent checkout/history, durable notification queue and deployment variables. It uses this same backend/database. Production activation requires matching bot/Go service secrets and the correct website/API URLs; no legacy SQLite users are automatically merged.
+
+## Phone-only staging registration
+
+The coordinated phone-only API, seller map activation, explicit staging email-index transition and preservation checks are documented in [PHONE_ONLY_AUTH.md](docs/production/PHONE_ONLY_AUTH.md). Legacy signup examples above apply only with phone accounts disabled; existing legacy login remains compatible. No production migration or deployment is automatic.

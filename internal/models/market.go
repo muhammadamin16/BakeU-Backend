@@ -42,7 +42,7 @@ type Market struct {
 	Name            string       `bson:"name" json:"name"`
 	Description     string       `bson:"description" json:"description"`
 	Phone           string       `bson:"phone" json:"phone"`
-	Email           string       `bson:"email" json:"email"`
+	Email           string       `bson:"email,omitempty" json:"email,omitempty"`
 	City            string       `bson:"city" json:"city"`
 	Area            string       `bson:"area" json:"area"`
 	Address         string       `bson:"address,omitempty" json:"address,omitempty"`

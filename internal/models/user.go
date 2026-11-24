@@ -24,9 +24,11 @@ type User struct {
 	Disabled          bool       `bson:"disabled,omitempty" json:"-"`
 	Frozen            bool       `bson:"frozen,omitempty" json:"-"`
 	UID               string     `bson:"_id" json:"uid"`
-	Email             string     `bson:"email" json:"email"`
-	PasswordHash      string     `bson:"passwordHash" json:"-"`
+	Email             string     `bson:"email,omitempty" json:"email,omitempty"`
+	PasswordHash      string     `bson:"passwordHash,omitempty" json:"-"`
 	Role              Role       `bson:"role" json:"role"`
+	FirstName         string     `bson:"firstName,omitempty" json:"firstName,omitempty"`
+	LastName          string     `bson:"lastName,omitempty" json:"lastName,omitempty"`
 	Name              string     `bson:"name" json:"name"`
 	Phone             string     `bson:"phone" json:"phone"`
 	Address           string     `bson:"address" json:"address"`

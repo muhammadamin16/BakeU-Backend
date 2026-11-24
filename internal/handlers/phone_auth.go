@@ -1,16 +1,12 @@
 package handlers
 
 import (
-	"net/mail"
 	"net/url"
 	"regexp"
-	"strings"
 
 	"bakeu/internal/identity"
-	"bakeu/internal/models"
 	"bakeu/internal/repository"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type PhoneAuthHandler struct {
@@ -31,11 +27,7 @@ func (h *PhoneAuthHandler) Start(c *gin.Context) {
 		c.JSON(503, gin.H{"error": "Telegram verification is not configured"})
 		return
 	}
-	var req struct {
-		signupRequest
-		Purpose    string `json:"purpose"`
-		MarketName string `json:"marketName"`
-	}
+	var req phoneStartRequest
 	if c.ShouldBindJSON(&req) != nil {
 		c.JSON(400, gin.H{"error": "invalid request"})
 		return
@@ -51,22 +43,12 @@ func (h *PhoneAuthHandler) Start(c *gin.Context) {
 		return
 	}
 	h.auth.guard.RecordFailure(c.ClientIP(), key) // Successful starts also count against request rate.
-	var draft *models.User
-	if req.Purpose == "register" {
-		email := normalizeEmail(req.Email)
-		addr, e := mail.ParseAddress(email)
-		if e != nil || addr.Address != email || len(email) > 254 || !req.Role.Valid() || len(req.Password) < minPasswordLen || len(req.Password) > maxPasswordLen || len(strings.TrimSpace(req.Name)) < 2 || len(req.Name) > 120 || len(req.Address) > 500 || (req.Role == models.RoleSeller && (len(strings.TrimSpace(req.MarketName)) < 2 || len(req.MarketName) > 120)) {
-			c.JSON(400, gin.H{"error": "Проверьте имя, email, пароль (8–72 байт), роль и название магазина."})
-			return
-		}
-		hash, e := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if e != nil {
-			c.JSON(503, gin.H{"error": "registration unavailable"})
-			return
-		}
-		draft = &models.User{Email: email, PasswordHash: string(hash), Name: strings.TrimSpace(req.Name), Phone: phone, Address: strings.TrimSpace(req.Address), Role: req.Role}
+	draft, market, err := req.registrationDraft(phone)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
 	}
-	token, expiry, err := h.repo.StartPhoneProof(c.Request.Context(), req.Purpose, phone, strings.TrimSpace(req.MarketName), draft)
+	token, expiry, err := h.repo.StartPhoneProof(c.Request.Context(), req.Purpose, phone, draft, market)
 	if err != nil {
 		orderError(c, err)
 		return
