@@ -53,18 +53,24 @@ func (r *MarketRepo) ActivateOwnMarket(ctx context.Context, uid, first, last, na
 			return nil, ErrForbidden
 		}
 		now := time.Now().UTC()
-		if _, e = db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid}, bson.M{"$set": bson.M{"role": models.RoleSeller, "name": first + " " + last, "shopOpenedAt": now}}); e != nil {
+		if _, e = db.Collection("users").UpdateOne(ctx, bson.M{"_id": uid}, bson.M{"$set": bson.M{"role": models.RoleSeller, "name": first + " " + last, "firstName": first, "lastName": last, "shopOpenedAt": now}}); e != nil {
 			return nil, e
 		}
 		if m == nil {
 			m = &models.Market{ID: bson.NewObjectID().Hex(), SellerID: uid, CreatedAt: now, Fulfillment: models.FulfillmentPickup, Phone: u.VerifiedPhoneE164, Email: u.Email}
+		}
+		if !m.Fulfillment.Valid() {
+			m.Fulfillment = models.FulfillmentPickup
 		}
 		m.Name, m.Address, m.Description, m.Latitude, m.Longitude, m.Status, m.UpdatedAt = name, address, description, &lat, &lng, models.MarketApproved, now
 		m.Phone = u.VerifiedPhoneE164
 		if isNew {
 			_, e = r.markets.InsertOne(ctx, m)
 		} else {
-			changed, updateErr := r.markets.ReplaceOne(ctx, bson.M{"_id": m.ID, "sellerId": uid, "status": models.MarketDraft}, m)
+			changed, updateErr := r.markets.UpdateOne(ctx, bson.M{"_id": m.ID, "sellerId": uid, "status": models.MarketDraft},
+				bson.M{"$set": bson.M{"name": name, "address": address, "description": description,
+					"latitude": lat, "longitude": lng, "phone": u.VerifiedPhoneE164,
+					"status": models.MarketApproved, "fulfillment": m.Fulfillment, "updatedAt": now}})
 			e = updateErr
 			if e == nil && changed.MatchedCount != 1 {
 				e = ErrConflict
@@ -98,9 +104,12 @@ func (r *MarketRepo) Moderate(ctx context.Context, id, actor string, expected, t
 		if m.Status != expected {
 			return nil, ErrConflict
 		}
+		previousUpdated := m.UpdatedAt
 		m.Status, m.UpdatedAt = target, time.Now().UTC()
 		m.RejectionReason = reason
-		changed, e := r.markets.ReplaceOne(ctx, bson.M{"_id": id, "status": expected}, m)
+		m.ReviewedAt = m.UpdatedAt
+		changed, e := r.markets.UpdateOne(ctx, marketExpectedFilter(m, expected, previousUpdated),
+			bson.M{"$set": bson.M{"status": target, "rejectionReason": reason, "updatedAt": m.UpdatedAt, "reviewedAt": m.ReviewedAt}})
 		if e != nil {
 			return nil, e
 		}
@@ -115,12 +124,7 @@ func (r *MarketRepo) Moderate(ctx context.Context, id, actor string, expected, t
 }
 
 func (r *MarketRepo) UpdateExpected(ctx context.Context, m *models.Market, expected models.MarketStatus, updatedAt time.Time) error {
-	filter := bson.M{"_id": m.ID, "sellerId": m.SellerID, "status": expected, "updatedAt": updatedAt}
-	if updatedAt.IsZero() {
-		delete(filter, "updatedAt")
-		filter["$or"] = bson.A{bson.M{"updatedAt": updatedAt}, bson.M{"updatedAt": bson.M{"$exists": false}}}
-	}
-	changed, err := r.markets.ReplaceOne(ctx, filter, m)
+	changed, err := r.markets.UpdateOne(ctx, marketExpectedFilter(m, expected, updatedAt), bson.M{"$set": marketFields(m)})
 	if err != nil {
 		return err
 	}
@@ -128,4 +132,13 @@ func (r *MarketRepo) UpdateExpected(ctx context.Context, m *models.Market, expec
 		return ErrConflict
 	}
 	return nil
+}
+
+func marketExpectedFilter(m *models.Market, expected models.MarketStatus, updatedAt time.Time) bson.M {
+	filter := bson.M{"_id": m.ID, "sellerId": m.SellerID, "status": expected, "updatedAt": updatedAt}
+	if updatedAt.IsZero() {
+		delete(filter, "updatedAt")
+		filter["$or"] = bson.A{bson.M{"updatedAt": updatedAt}, bson.M{"updatedAt": bson.M{"$exists": false}}}
+	}
+	return filter
 }

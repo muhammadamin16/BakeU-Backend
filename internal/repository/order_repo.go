@@ -15,16 +15,6 @@ import (
 // for the dashboard charts (Asia/Tashkent, UTC+5, no DST).
 const bucketTimezone = "+05:00"
 
-// activeStatuses are the order statuses that still require seller action.
-var activeStatuses = bson.A{
-	models.OrderPending,
-	models.OrderAccepted,
-	models.OrderReady,
-	models.OrderDelivering,
-	models.OrderPreparing,
-	models.OrderOutForDelivery,
-}
-
 // DayBucket is one day's aggregated value (revenue or order count). Day is the
 // start of the local calendar day the orders fall into.
 type DayBucket struct {
@@ -135,7 +125,7 @@ func (r *OrderRepo) DeliveredRevenueByDay(ctx context.Context, sellerID string, 
 func (r *OrderRepo) ActiveByDay(ctx context.Context, sellerID string, start, end time.Time) ([]DayBucket, error) {
 	return r.bucketByDay(ctx, bson.M{
 		"sellerId":  sellerID,
-		"status":    bson.M{"$in": activeStatuses},
+		"status":    bson.M{"$in": models.ActiveOrderStatuses()},
 		"createdAt": bson.M{"$gte": start, "$lt": end},
 	}, bson.M{"$sum": 1})
 }
@@ -161,10 +151,10 @@ func (r *OrderRepo) bucketByDay(ctx context.Context, filter bson.M, valueExpr bs
 }
 
 // ActiveBreakdown returns the per-status counts of a seller's active orders
-// (pending / preparing / out_for_delivery). Statuses with no orders are absent.
+// across both fulfillment workflows. Statuses with no orders are absent.
 func (r *OrderRepo) ActiveBreakdown(ctx context.Context, sellerID string) (map[models.OrderStatus]int, error) {
 	cur, err := r.orders.Aggregate(ctx, mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"sellerId": sellerID, "status": bson.M{"$in": activeStatuses}}}},
+		{{Key: "$match", Value: bson.M{"sellerId": sellerID, "status": bson.M{"$in": models.ActiveOrderStatuses()}}}},
 		{{Key: "$group", Value: bson.M{"_id": "$status", "count": bson.M{"$sum": 1}}}},
 	})
 	if err != nil {

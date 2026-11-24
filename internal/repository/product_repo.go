@@ -36,7 +36,7 @@ func (r *ProductRepo) Create(ctx context.Context, p *models.Product) (string, er
 // Get loads a single product. Returns ErrNotFound if it does not exist.
 func (r *ProductRepo) Get(ctx context.Context, id string) (*models.Product, error) {
 	var p models.Product
-	if err := r.products.FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
+	if err := r.products.FindOne(ctx, bson.M{"_id": id, "deletedAt": bson.M{"$exists": false}}).Decode(&p); err != nil {
 		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
@@ -56,7 +56,7 @@ func (r *ProductRepo) UpdateDetails(ctx context.Context, p *models.Product, vari
 	if variants != nil {
 		fields["variants"] = *variants
 	}
-	return r.patch(ctx, bson.M{"_id": p.ID, "sellerId": p.SellerID}, bson.M{"$set": fields})
+	return r.patch(ctx, bson.M{"_id": p.ID, "sellerId": p.SellerID, "deletedAt": bson.M{"$exists": false}}, bson.M{"$set": fields})
 }
 
 func (r *ProductRepo) patch(ctx context.Context, filter, update any) (*models.Product, error) {
@@ -76,10 +76,20 @@ func (r *ProductRepo) patch(ctx context.Context, filter, update any) (*models.Pr
 	return &product, nil
 }
 
-// Delete removes a product document.
-func (r *ProductRepo) Delete(ctx context.Context, id string) error {
-	_, err := r.products.DeleteOne(ctx, bson.M{"_id": id})
-	return err
+// Archive preserves the document, media and references. The owner predicate
+// and active-state predicate also protect against stale/concurrent writes.
+func (r *ProductRepo) Archive(ctx context.Context, id, sellerID string) error {
+	now := time.Now().UTC()
+	result, err := r.products.UpdateOne(ctx,
+		bson.M{"_id": id, "sellerId": sellerID, "deletedAt": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"deletedAt": now, "updatedAt": now, "available": false}})
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // List returns products optionally filtered by category and seller, and by a
@@ -91,7 +101,7 @@ func (r *ProductRepo) List(ctx context.Context, category, sellerID, search strin
 }
 
 func (r *ProductRepo) ListPage(ctx context.Context, category, sellerID, search string, restrictToSellers []string, after string, limit int) ([]models.Product, error) {
-	filter := bson.M{}
+	filter := bson.M{"deletedAt": bson.M{"$exists": false}}
 	if category != "" {
 		filter["category"] = category
 	}
@@ -139,7 +149,7 @@ func (r *ProductRepo) ListPage(ctx context.Context, category, sellerID, search s
 
 // CountBySeller returns the number of products listed by a seller.
 func (r *ProductRepo) CountBySeller(ctx context.Context, sellerID string) (int64, error) {
-	return r.products.CountDocuments(ctx, bson.M{"sellerId": sellerID})
+	return r.products.CountDocuments(ctx, bson.M{"sellerId": sellerID, "deletedAt": bson.M{"$exists": false}})
 }
 
 // contains reports whether s is present in xs.
@@ -154,7 +164,7 @@ func contains(xs []string, s string) bool {
 
 // AppendImage checks the cap and appends the image in one update.
 func (r *ProductRepo) AppendImage(ctx context.Context, id, sellerID, url string, limit int) (*models.Product, error) {
-	filter := bson.M{"_id": id, "sellerId": sellerID,
+	filter := bson.M{"_id": id, "sellerId": sellerID, "deletedAt": bson.M{"$exists": false},
 		"$expr": bson.M{"$lt": bson.A{
 			bson.M{"$size": bson.M{"$ifNull": bson.A{"$imageURLs", bson.A{}}}}, limit,
 		}},

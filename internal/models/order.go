@@ -23,6 +23,12 @@ const (
 	OrderCancelled      OrderStatus = "cancelled"
 )
 
+// ActiveOrderStatuses includes both legacy and current fulfillment workflows.
+// Return a fresh slice so callers cannot change the shared status definition.
+func ActiveOrderStatuses() []OrderStatus {
+	return []OrderStatus{OrderPending, OrderAccepted, OrderPreparing, OrderReady, OrderDelivering, OrderOutForDelivery}
+}
+
 // ValidOrderStatus reports whether s is a known status.
 func ValidOrderStatus(s OrderStatus) bool {
 	switch s {

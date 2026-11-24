@@ -3,8 +3,17 @@ package models
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"time"
 )
+
+// MaxProductPrice is shared by product writes and checkout. A listing must
+// never accept a price that a one-unit order would reject.
+const MaxProductPrice = 1e12
+
+func ValidProductPrice(price float64) bool {
+	return price > 0 && price <= MaxProductPrice && !math.IsNaN(price) && !math.IsInf(price, 0)
+}
 
 type ProductVariant struct {
 	ID    string  `bson:"id" json:"id"`
@@ -39,4 +48,6 @@ type Product struct {
 	RatingCount int              `bson:"ratingCount" json:"ratingCount"`
 	CreatedAt   time.Time        `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time        `bson:"updatedAt" json:"updatedAt"`
+	// Archived listings retain their MongoDB document, media and historical IDs.
+	DeletedAt *time.Time `bson:"deletedAt,omitempty" json:"-"`
 }

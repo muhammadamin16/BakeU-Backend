@@ -182,7 +182,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			orderError(c, err)
 			return
 		}
-		if !p.Available || p.Price < 0 || p.Price > 1e12 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0) {
+		if !p.Available || !models.ValidProductPrice(p.Price) {
 			c.JSON(400, gin.H{"error": "Товар недоступен."})
 			return
 		}
@@ -199,7 +199,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 					break
 				}
 			}
-			if !found || price <= 0 || price > 1e12 || math.IsNaN(price) || math.IsInf(price, 0) {
+			if !found || !models.ValidProductPrice(price) {
 				c.JSON(400, gin.H{"error": "Выбранный вариант товара недоступен."})
 				return
 			}

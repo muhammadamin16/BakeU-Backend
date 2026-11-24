@@ -1,5 +1,9 @@
 # Bakeu — Bakery Marketplace API
 
+Marketplace P0: [changes, regression tests and manual Railway staging steps](docs/production/MARKETPLACE_P0.md).
+Use the matching `codex/marketplace-p0-20261124` branch in BakeU.UZ and BakeU-Backend;
+no merge or deploy is automatic.
+
 A Go backend for **Bakeu**, a marketplace for bakery goods (bread, cookies, etc.).
 Bakers (sellers) list products with photos; customers browse, add to cart, order, and
 review.

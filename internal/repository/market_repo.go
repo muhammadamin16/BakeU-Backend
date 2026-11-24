@@ -68,10 +68,38 @@ func (r *MarketRepo) GetBySeller(ctx context.Context, sellerID string) (*models.
 	return &m, nil
 }
 
-// Update fully overwrites the market document at _id=m.ID.
+// marketFields lists known editable fields, never identity/creation fields.
+// A typed model is not the whole stored document: legacy/future fields and
+// concurrently added metadata must survive every storefront mutation.
+func marketFields(m *models.Market) bson.M {
+	fields := bson.M{"name": m.Name, "description": m.Description, "phone": m.Phone,
+		"city": m.City, "area": m.Area, "address": m.Address, "fulfillment": m.Fulfillment,
+		"logoURL": m.LogoURL, "status": m.Status, "rejectionReason": m.RejectionReason, "updatedAt": m.UpdatedAt}
+	if m.Email != "" {
+		fields["email"] = m.Email
+	}
+	if m.Latitude != nil {
+		fields["latitude"] = *m.Latitude
+	}
+	if m.Longitude != nil {
+		fields["longitude"] = *m.Longitude
+	}
+	if !m.ReviewedAt.IsZero() {
+		fields["reviewedAt"] = m.ReviewedAt
+	}
+	return fields
+}
+
+// Update patches known fields while retaining unknown data and immutable IDs.
 func (r *MarketRepo) Update(ctx context.Context, m *models.Market) error {
-	_, err := r.markets.ReplaceOne(ctx, bson.M{"_id": m.ID}, m)
-	return err
+	changed, err := r.markets.UpdateOne(ctx, bson.M{"_id": m.ID, "sellerId": m.SellerID}, bson.M{"$set": marketFields(m)})
+	if err != nil {
+		return err
+	}
+	if changed.MatchedCount != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ApprovedSellerIDs returns the seller IDs whose market is approved. Used to

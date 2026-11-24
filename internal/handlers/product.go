@@ -3,7 +3,6 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,7 +49,7 @@ func (req *productRequest) validVariants() bool {
 	for i, variant := range *req.Variants {
 		variant.Name = strings.TrimSpace(variant.Name)
 		key := strings.ToLower(variant.Name)
-		if key == "" || len([]rune(key)) > 100 || variant.Price <= 0 || variant.Price > 1e12 || math.IsNaN(variant.Price) || math.IsInf(variant.Price, 0) || names[key] {
+		if key == "" || len([]rune(key)) > 100 || !models.ValidProductPrice(variant.Price) || names[key] {
 			return false
 		}
 		if variant.ID != "" {
@@ -79,8 +78,9 @@ func (h *ProductHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product variants"})
 		return
 	}
-	if req.Title == "" || req.Price <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be > 0"})
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" || !models.ValidProductPrice(req.Price) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be finite, > 0 and <= 1000000000000"})
 		return
 	}
 	now := time.Now().UTC()
@@ -127,8 +127,9 @@ func (h *ProductHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid product variants"})
 		return
 	}
-	if req.Title == "" || req.Price <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be > 0"})
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" || !models.ValidProductPrice(req.Price) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required and price must be finite, > 0 and <= 1000000000000"})
 		return
 	}
 
@@ -178,21 +179,21 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, updated)
 }
 
-// Delete handles DELETE /api/products/:id (seller only, owner only). The
-// product's stored images are removed with it so GridFS does not accumulate
-// orphans.
+// Delete archives a listing without destroying its document, images or order
+// snapshots. Public reads, checkout and seller lists exclude archived items.
 func (h *ProductHandler) Delete(c *gin.Context) {
 	p, ok := h.loadOwned(c)
 	if !ok {
 		return
 	}
 	ctx := c.Request.Context()
-	if err := h.products.Delete(ctx, p.ID); err != nil {
+	if err := h.products.Archive(ctx, p.ID, p.SellerID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete product"})
 		return
-	}
-	for _, u := range p.ImageURLs {
-		deleteImageByURL(ctx, h.store, u)
 	}
 	c.Status(http.StatusNoContent)
 }

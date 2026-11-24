@@ -244,14 +244,12 @@ func (h *DashboardHandler) buildActive(ctx context.Context, sellerID string, now
 	if err != nil {
 		return activeBlock{}, err
 	}
-	// Always expose all three statuses so the card has stable keys.
-	breakdown := map[string]int{
-		string(models.OrderPending):        counts[models.OrderPending],
-		string(models.OrderPreparing):      counts[models.OrderPreparing],
-		string(models.OrderOutForDelivery): counts[models.OrderOutForDelivery],
-	}
+	// The total, stable breakdown keys and chart use the same status set.
+	breakdown := make(map[string]int)
 	total := 0
-	for _, n := range breakdown {
+	for _, status := range models.ActiveOrderStatuses() {
+		n := counts[status]
+		breakdown[string(status)] = n
 		total += n
 	}
 
