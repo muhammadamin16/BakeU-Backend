@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,7 +41,7 @@ func main() {
 	defer clients.Close()
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.Port),
 		Handler:           router.New(clients.DB, cfg),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Generous enough for a 5 MB image upload/download on a slow mobile

@@ -147,9 +147,9 @@ func TestVerifiedSelfServicePreservesBuyerIdentityAndModeration(t *testing.T) {
 	if me["uid"] != buyer.UID || me["role"] != "seller" {
 		t.Fatal("identity changed during promotion")
 	}
-	call(201, "POST", "/api/orders", buy, token(buyer), "", buyer.UID, "after-shop")
+	call(403, "POST", "/api/orders", buy, token(buyer), "", buyer.UID, "after-shop")
 	list := call(200, "GET", "/api/orders", nil, token(buyer), "", buyer.UID, "")
-	if len(list["placed"].([]any)) != 2 {
+	if len(list["placed"].([]any)) != 1 {
 		t.Fatal("buyer history disappeared after opening shop")
 	}
 	identity := call(200, "GET", "/api/integrations/telegram/me", nil, bridge, "911", "", "")

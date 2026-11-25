@@ -127,8 +127,8 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		orderError(c, e)
 		return
 	}
-	if !u.Role.Valid() {
-		orderError(c, repository.ErrForbidden)
+	if u.Role != models.RoleCustomer {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Для оформления заказа войдите в аккаунт покупателя."})
 		return
 	}
 	if len(req.Items) == 0 || len(req.Items) > maxCartItems {

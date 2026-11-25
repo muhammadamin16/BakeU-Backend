@@ -14,6 +14,7 @@ type Config struct {
 	TelegramBotUsername string
 	TelegramBridgeToken string
 	TelegramSiteURL     string
+	ListenHost          string
 	Port                string // HTTP port to listen on (Cloud Run sets PORT)
 	MongoURI            string // MongoDB connection string (Atlas or local)
 	MongoDB             string // database name
@@ -39,6 +40,7 @@ func Load() Config {
 		TelegramBotUsername: getEnv("TELEGRAM_BOT_USERNAME", "BakeUuzBot"),
 		TelegramBridgeToken: os.Getenv("TELEGRAM_BRIDGE_TOKEN"),
 		TelegramSiteURL:     getEnv("TELEGRAM_SITE_URL", "https://bakeu-website-production.up.railway.app"),
+		ListenHost:          os.Getenv("BAKEU_LISTEN_HOST"),
 		Port:                getEnv("PORT", "8080"),
 		MongoURI:            strings.TrimSpace(os.Getenv("MONGODB_URI")),
 		MongoDB:             strings.TrimSpace(os.Getenv("MONGODB_DB")),

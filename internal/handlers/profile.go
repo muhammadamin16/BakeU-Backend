@@ -94,5 +94,5 @@ func (h *ProfileHandler) Me(c *gin.Context) {
 			return
 		}
 	}
-	c.JSON(http.StatusOK, meResponse{User: u, Market: market, Capabilities: map[string]bool{"buy": true, "sell": u.Role == models.RoleSeller, "openShop": h.selfService && u.PhoneVerified() && (market == nil || market.Status == models.MarketDraft), "admin": h.adminIDs[u.UID] && u.PhoneVerified()}})
+	c.JSON(http.StatusOK, meResponse{User: u, Market: market, Capabilities: map[string]bool{"buy": u.Role == models.RoleCustomer, "sell": u.Role == models.RoleSeller, "openShop": h.selfService && u.PhoneVerified() && (market == nil || market.Status == models.MarketDraft), "admin": h.adminIDs[u.UID] && u.PhoneVerified()}})
 }

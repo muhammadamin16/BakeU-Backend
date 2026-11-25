@@ -24,17 +24,18 @@ var telegramActorRE = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 var challengeRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type TelegramHandler struct {
-	repo     *repository.TelegramRepo
-	users    *repository.UserRepo
-	orders   *repository.OrderRepo
-	markets  *repository.MarketRepo
-	products *repository.ProductRepo
-	guard    *auth.LoginGuard
-	siteURL  string
+	repo              *repository.TelegramRepo
+	users             *repository.UserRepo
+	orders            *repository.OrderRepo
+	markets           *repository.MarketRepo
+	products          *repository.ProductRepo
+	guard             *auth.LoginGuard
+	siteURL           string
+	allowLoopbackSite bool
 }
 
-func NewTelegramHandler(r *repository.TelegramRepo, u *repository.UserRepo, o *repository.OrderRepo, m *repository.MarketRepo, p *repository.ProductRepo, site string) *TelegramHandler {
-	return &TelegramHandler{repo: r, users: u, orders: o, markets: m, products: p, guard: auth.NewLoginGuard(), siteURL: site}
+func NewTelegramHandler(r *repository.TelegramRepo, u *repository.UserRepo, o *repository.OrderRepo, m *repository.MarketRepo, p *repository.ProductRepo, site string, allowLoopbackSite bool) *TelegramHandler {
+	return &TelegramHandler{repo: r, users: u, orders: o, markets: m, products: p, guard: auth.NewLoginGuard(), siteURL: site, allowLoopbackSite: allowLoopbackSite}
 }
 func TelegramServiceAuth(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -133,14 +134,15 @@ func (h *TelegramHandler) StartLink(c *gin.Context) {
 	if req.Role == "SELLER" {
 		role = models.RoleSeller
 	}
+	site, e := url.Parse(h.siteURL)
+	if e != nil || site.Host == "" || site.User != nil || site.RawQuery != "" ||
+		(site.Scheme != "https" && !(h.allowLoopbackSite && site.Scheme == "http" && site.Hostname() == "127.0.0.1")) {
+		c.JSON(503, gin.H{"error": "Telegram website URL is not configured"})
+		return
+	}
 	token, expiry, e := h.repo.Challenge(c.Request.Context(), actor, phone, role)
 	if e != nil {
 		orderError(c, e)
-		return
-	}
-	site, e := url.Parse(h.siteURL)
-	if e != nil || site.Host == "" || site.Scheme != "https" || site.User != nil || site.RawQuery != "" {
-		c.JSON(503, gin.H{"error": "Telegram website URL is not configured"})
 		return
 	}
 	site.Fragment = "/telegram/link?challenge=" + token

@@ -83,7 +83,7 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 	dashboard := handlers.NewDashboardHandler(orderRepo, reviewRepo, productRepo, userRepo, cache.New())
 
 	telegramRepo := repository.NewTelegramRepo(db)
-	telegram := handlers.NewTelegramHandler(telegramRepo, userRepo, orderRepo, marketRepo, productRepo, cfg.TelegramSiteURL)
+	telegram := handlers.NewTelegramHandler(telegramRepo, userRepo, orderRepo, marketRepo, productRepo, cfg.TelegramSiteURL, cfg.ListenHost == "127.0.0.1")
 	bridge := r.Group("/api/integrations/telegram", handlers.TelegramServiceAuth(cfg.TelegramBridgeToken), middleware.BodyLimit(jsonBodyLimit))
 	bridge.GET("/me", telegram.Me)
 	bridge.GET("/diagnostics", func(c *gin.Context) {
@@ -176,6 +176,9 @@ func New(db *mongo.Database, cfg config.Config) *gin.Engine {
 		customer.POST("/products/:id/reviews", review.Create)
 	}
 	admin := r.Group("/api/admin", middleware.AuthRequired(jwtm, sessions), handlers.RequireVerifiedAdmin(userRepo, cfg.AdminUserIDs), middleware.BodyLimit(jsonBodyLimit))
+	adminWorkspace := handlers.NewAdminWorkspace(db)
+	admin.GET("/records/:kind", adminWorkspace.Records)
+	admin.GET("/sales", adminWorkspace.Sales)
 	admin.GET("/markets", market.ListAdmin)
 	admin.PATCH("/markets/:id/status", market.Moderate)
 
