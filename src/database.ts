@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Db, MongoClient } from 'mongodb';
+import { Db, MongoClient, type ClientSession } from 'mongodb';
 
 @Injectable()
 export class Database implements OnModuleDestroy {
@@ -11,6 +11,10 @@ export class Database implements OnModuleDestroy {
     if (!MONGODB_URI || !MONGODB_DB) throw new Error('MONGODB_URI and MONGODB_DB are required');
     this.client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
     this.db = this.client.db(MONGODB_DB);
+  }
+
+  transaction<T>(work: (session: ClientSession) => Promise<T>) {
+    return this.client.withSession(session => session.withTransaction(() => work(session)));
   }
 
   async onModuleDestroy() {
