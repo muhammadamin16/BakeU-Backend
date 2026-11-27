@@ -210,6 +210,9 @@ export class Auth implements OnModuleInit {
           user = { ...draft, _id: id(), name: draft.name, role: draft.role, phone: proof.phone, verifiedPhoneE164: proof.phone,
             phoneVerifiedAt: now, status: 'active', createdAt: now, address: proof.market?.address ?? '' };
           await this.users.insertOne(user, options);
+          await this.db.collection('audit_events').insertOne({
+            actorId: user._id, targetId: user._id, kind: 'user.phone_registered', at: now,
+          }, options);
           if (proof.market) {
             const marketId = id();
             await this.db.collection<{ _id: string }>('markets').insertOne({

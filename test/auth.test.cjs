@@ -238,9 +238,12 @@ test('phone verification and durable sessions on a MongoDB replica set', async t
   });
   assert.equal(freeze.status, 200);
   const audit = await (await read('/admin/records/audit')).json();
-  assert.equal(audit.total, 1);
-  assert.equal(audit.items[0].kind, 'user.freeze');
-  assert.equal(audit.items[0].data.secret, undefined);
+  assert.equal(audit.total, 3);
+  const freezeEvent = audit.items.find(item => item.kind === 'user.freeze');
+  assert.equal(freezeEvent.data.secret, undefined);
+  const registration = audit.items.filter(item => item.kind === 'user.phone_registered');
+  assert.equal(registration.length, 2);
+  assert.ok(registration.every(item => item.data?.phone === undefined));
   assert.equal((await me(token)).status, 403);
   const rotatedCookie = restored.headers.get('set-cookie').split(';')[0];
   assert.equal((await post('/auth/refresh', {}, { ...browser, cookie: rotatedCookie })).status, 403);
