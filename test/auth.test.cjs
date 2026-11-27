@@ -137,6 +137,62 @@ test('phone verification and durable sessions on a MongoDB replica set', async t
   assert.equal((await fetch(base + images[0])).status, 200);
   assert.equal((await db.collection('products').findOne({ _id: item.id })).legacyField, 'retained');
 
+  const secondSeller = 'seller-fixture';
+  const secondShop = 'shop-fixture';
+  await db.collection('users').insertOne({ _id: secondSeller, role: 'seller', status: 'active' });
+  await db.collection('markets').insertOne({ _id: secondShop, sellerId: secondSeller, name: 'Second shop', status: 'approved' });
+  await db.collection('products').insertMany([
+    { _id: 'from-first', sellerId: signedIn.user.uid, title: 'Bread', price: 43.20, available: true },
+    { _id: 'from-second', sellerId: secondSeller, title: 'Cake', price: 9.45, available: true },
+  ]);
+  const orderLines = [{ productId: 'from-first', qty: 2 }, { productId: 'from-second', qty: 3 }];
+  const buyerTicket = await (await post('/integrations/telegram/auth/launch', {}, bridge('200'))).json();
+  const buyerSession = await (await post('/auth/phone/telegram', { ticket: buyerTicket.ticket })).json();
+  const buying = { authorization: 'Bearer ' + buyerSession.token };
+  const read = (path, headers = buying) => fetch(base + '/api' + path, { headers });
+  assert.equal((await fetch(base + '/api/favorites/from-first', { method: 'PUT', headers: buying })).status, 200);
+  assert.deepEqual((await (await read('/favorites')).json()).productIds, ['from-first']);
+  const sellerCart = await (await read('/cart', signed)).json();
+  assert.equal((await post('/cart/items', { ...orderLines[0], cartRevision: sellerCart.revision }, signed)).status, 400);
+  assert.equal((await post('/cart/items', { ...orderLines[1], cartRevision: sellerCart.revision }, signed)).status, 200);
+  const initial = await (await read('/cart')).json();
+  const saved = await post('/cart/items', { ...orderLines[0], cartRevision: initial.revision }, buying);
+  assert.equal(saved.status, 200);
+  assert.equal((await post('/cart/items', { ...orderLines[1], cartRevision: initial.revision }, buying)).status, 409);
+  const cart = await saved.json();
+  const fulfillment = { scheduledAt: new Date(Date.now() + 86400000).toISOString(), fulfillment: 'pickup' };
+  const headers = { ...buying, 'idempotency-key': 'checkout-test-key' };
+  const orderBody = { cartRevision: cart.revision, total: 1, items: orderLines, deliveries: {
+    [shop._id]: fulfillment, [secondShop]: { ...fulfillment, fulfillment: 'delivery', deliveryAddress: 'Test address', comment: 'Call first' },
+  } };
+  const placed = await post('/orders', orderBody, headers);
+  assert.equal(placed.status, 201);
+  const orderResult = await placed.json();
+  assert.deepEqual(orderResult.orders.map(order => order.total), [86.4, 28.35]);
+  assert.deepEqual(await (await post('/orders', orderBody, headers)).json(), orderResult);
+  assert.equal(await db.collection('orders').countDocuments(), 2);
+  assert.equal(await db.collection('telegram_order_outbox').countDocuments(), 2);
+  assert.equal((await (await read('/cart')).json()).items.length, 0);
+  const [order] = orderResult.orders;
+  const statusPath = base + '/api/orders/' + order.id + '/status';
+  const transition = await fetch(statusPath, { method: 'PATCH', headers: { ...signed,
+    'content-type': 'application/json', 'idempotency-key': 'order-test-status' },
+    body: JSON.stringify({ status: 'accepted', expectedStatus: 'pending', expectedVersion: 1 }) });
+  assert.equal(transition.status, 200);
+  const history = await (await read('/orders')).json();
+  assert.equal(history.placed.length, 2);
+  assert.equal(history.incoming.length, 0);
+  assert.deepEqual(history.placed.find(value => value.id === order.id).history.map(x => x.status), ['pending', 'accepted']);
+  assert.equal(order.customerId, buyerSession.user.uid);
+  const claimed = await post('/integrations/telegram/notifications/claim', { limit: 10 }, bridge('100'));
+  const { jobs } = await claimed.json();
+  assert.equal(jobs.length, 2);
+  const job = jobs.find(item => item.kind === 'order.status_changed');
+  const receiptPath = '/integrations/telegram/notifications/' + job.id;
+  assert.deepEqual(await (await post(receiptPath + '/begin', { leaseToken: job.leaseToken }, bridge('100'))).json(), { started: true });
+  assert.deepEqual(await (await post(receiptPath + '/ack', { leaseToken: job.leaseToken, messageId: 123 }, bridge('100'))).json(), { ok: true });
+  assert.equal((await (await read('/me/notifications')).json()).items[0].telegramState, 'sent');
+
   await db.collection('users').updateOne({ _id: signedIn.user.uid }, { $set: { freezeUntil: new Date(Date.now() + 60000) } });
   assert.equal((await me(token)).status, 403);
   const rotatedCookie = restored.headers.get('set-cookie').split(';')[0];

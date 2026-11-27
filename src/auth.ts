@@ -147,10 +147,14 @@ export class Auth implements OnModuleInit {
     await this.proofs.insertOne({ _id: proofId, purpose, phone, expiresAt, attempts: 0, ...(draft && { draft }), ...(market && { market }) });
     return { id: proofId, expiresAt, telegramUrl: `https://t.me/${bot}?start=goauth_${proofId}` };
   }
-  bridgeActor(req: Request) {
+  authorizeBridge(req: Request) {
     const secret = process.env.TELEGRAM_BRIDGE_TOKEN;
+    if (!secret || !equal(req.headers.authorization ?? '', 'Bearer ' + secret)) throw invalid();
+  }
+  bridgeActor(req: Request) {
+    this.authorizeBridge(req);
     const actor = req.headers['x-telegram-user-id'] ?? '';
-    if (!secret || !equal(req.headers.authorization ?? '', 'Bearer ' + secret) || !/^[1-9]\d{0,19}$/.test(actor)) throw invalid();
+    if (!/^[1-9]\d{0,19}$/.test(actor)) throw invalid();
     return actor;
   }
   async contact(actor: string, input: Input) {
