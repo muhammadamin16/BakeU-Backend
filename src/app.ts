@@ -1,3 +1,4 @@
+import { SellerProducts } from './seller-products.js';
 import { Auth, AuthController } from './auth.js';
 import { Controller, Get, Module, ServiceUnavailableException } from '@nestjs/common';
 import { CatalogController } from './catalog.js';
@@ -22,5 +23,5 @@ class HealthController {
   }
 }
 
-@Module({ controllers: [HealthController, CatalogController, MediaController, AuthController], providers: [Database, Auth] })
+@Module({ controllers: [HealthController, CatalogController, MediaController, AuthController, SellerProducts], providers: [Database, Auth] })
 export class AppModule {}

@@ -100,6 +100,43 @@ test('phone verification and durable sessions on a MongoDB replica set', async t
   const restored = await post('/auth/refresh', {}, { ...browser, cookie });
   assert.equal(restored.status, 200);
   const { token } = await restored.json();
+  const sharp = require('sharp');
+  const signed = { authorization: 'Bearer ' + token };
+  const create = await post('/products', { title: 'Cake', price: 45.25, available: true, sellerId: 'forged' }, signed);
+  assert.equal(create.status, 201);
+  const item = await create.json();
+  assert.equal(item.sellerId, signedIn.user.uid);
+  assert.equal(item.draft, true);
+  await db.collection('products').updateOne({ _id: item.id }, { $set: { legacyField: 'retained' } });
+  const path = '/api/products/' + item.id;
+  const write = (body, method = 'PUT') => fetch(base + path, {
+    method, headers: { ...signed, 'content-type': 'application/json' }, ...(body && { body: JSON.stringify(body) }),
+  });
+  assert.equal((await write({ publish: true })).status, 400);
+  const invalid = new FormData();
+  invalid.append('image', new Blob(['not an image'], { type: 'image/png' }), 'invalid.png');
+  assert.equal((await fetch(base + path + '/image', { method: 'POST', headers: signed, body: invalid })).status, 400);
+  const form = new FormData();
+  for (const background of ['red', 'blue', 'green']) {
+    const photo = await sharp({ create: { width: 32, height: 32, channels: 3, background } }).png().toBuffer();
+    form.append('image', new Blob([photo], { type: 'image/png' }), background + '.png');
+  }
+  const uploaded = await fetch(base + path + '/image', { method: 'POST', headers: signed, body: form });
+  assert.equal(uploaded.status, 201);
+  const images = (await uploaded.json()).imageURLs;
+  assert.equal(images.length, 3);
+  assert.equal((await fetch(base + images[0])).status, 404);
+  assert.equal((await fetch(base + '/api/me/products/' + item.id + '/images/' + images[0].split('/').at(-1), { headers: signed })).status, 200);
+  const published = await write({ publish: true, imageURLs: [...images].reverse() });
+  assert.equal(published.status, 200);
+  assert.deepEqual((await (await fetch(base + path)).json()).imageURLs, [...images].reverse());
+  assert.equal((await fetch(base + images[0])).status, 200);
+  assert.equal((await write(undefined, 'DELETE')).status, 204);
+  assert.equal((await fetch(base + path)).status, 404);
+  assert.equal((await write({ title: 'Try to resurrect' })).status, 404);
+  assert.equal((await fetch(base + images[0])).status, 200);
+  assert.equal((await db.collection('products').findOne({ _id: item.id })).legacyField, 'retained');
+
   await db.collection('users').updateOne({ _id: signedIn.user.uid }, { $set: { freezeUntil: new Date(Date.now() + 60000) } });
   assert.equal((await me(token)).status, 403);
   const rotatedCookie = restored.headers.get('set-cookie').split(';')[0];

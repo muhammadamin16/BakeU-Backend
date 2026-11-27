@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2024",
     "lib": ["ES2025"],
-    "types": ["node"],
+    "types": ["node", "multer"],
     "module": "node16",
     "rootDir": "src",
     "outDir": "dist",

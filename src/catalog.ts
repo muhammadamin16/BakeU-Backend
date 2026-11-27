@@ -19,7 +19,7 @@ interface Market extends Listing {
   fulfillment?: string;
   status: string;
 }
-interface Product extends Listing {
+export interface Product extends Listing {
   title: string;
   description?: string;
   category?: string;
@@ -31,6 +31,8 @@ interface Product extends Listing {
   ratingCount?: number;
   deletedAt?: Date;
   draft?: boolean;
+  revision?: number;
+  priorPublicImages?: string[];
   unit?: string;
   weight?: string;
   portions?: string;

@@ -16,6 +16,16 @@ export class MediaController {
     const bucket = new GridFSBucket(this.database.db);
     const file = await bucket.find({ _id: objectId, 'metadata.visibility': { $ne: 'private' } }).next();
     if (!file) throw new NotFoundException('Image not found');
+    if (file.metadata?.visibility === 'product') {
+      const url = '/api/images/' + objectId.toHexString();
+      const product = await this.database.db.collection<{ _id: string; sellerId: string }>('products').findOne({
+        _id: String(file.metadata.productId), draft: { $ne: true },
+        $or: [{ imageURLs: url }, { priorPublicImages: url }],
+      });
+      if (!product || !await this.database.db.collection('markets').findOne({ sellerId: product.sellerId, status: 'approved' })) {
+        throw new NotFoundException('Image not found');
+      }
+    }
     const mime = file.metadata?.contentType;
     const inline = inlineTypes.has(mime);
     return new StreamableFile(bucket.openDownloadStream(objectId), {
