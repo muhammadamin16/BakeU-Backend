@@ -5,7 +5,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { ObjectId, type ClientSession, type Collection, type Filter } from 'mongodb';
 import { activeStatuses, salesReport } from './analytics.js';
-import { Auth } from './auth.js';
+import { Auth, isAdminAccount } from './auth.js';
 import { publicProduct, type Product } from './catalog.js';
 import { Database } from './database.js';
 import { priceInMinorUnits } from './seller-products.js';
@@ -280,9 +280,16 @@ export class Commerce {
     return this.changeStatus((await this.actor(req))._id, req, id, body);
   }
 
-  private async changeStatus(actorId: string, req: Request, id: string, body: Input, bot = false) {
-    return this.once(actorId, 'status:' + id, req, body, async session => {
-      const order = await this.orders.findOne({ _id: id, sellerId: actorId }, { session });
+  @Patch('admin/orders/:id/status')
+  async adminTransition(@Req() req: Request, @Param('id') id: string, @Body() body: Input) {
+    const user = await this.actor(req);
+    if (!isAdminAccount(user)) throw new ForbiddenException('Administrator access required');
+    return this.changeStatus(user._id, req, id, body, false, true);
+  }
+
+  private async changeStatus(actorId: string, req: Request, id: string, body: Input, bot = false, admin = false) {
+    return this.once(actorId, (admin ? 'admin-status:' : 'status:') + id, req, body, async session => {
+      const order = await this.orders.findOne({ _id: id, ...(!admin && { sellerId: actorId }) }, { session });
       if (!order) throw new NotFoundException('Order not found');
       const target = body.status;
       const displayed = view(order);
@@ -298,6 +305,9 @@ export class Commerce {
         { $set: { status: target, version, updatedAt: at, workflowVersion: 2 },
           $push: { history: { status: target, at, actorId, version } } }, { returnDocument: 'after', session });
       if (!updated) throw new ConflictException('Order changed');
+      if (admin) await this.db.collection('audit_events').insertOne({
+        actorId, targetId: id, kind: 'order.status', at, data: { from: displayed.status, to: target },
+      }, { session });
       await this.notice(updated, updated.customerId, session);
       return view(updated);
     });

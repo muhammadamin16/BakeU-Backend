@@ -75,3 +75,20 @@ families retain string IDs. An unverified legacy account claim still requires
 a separate ownership verification procedure. Plan and subscription data can
 be viewed in Admin. Paid checkout requires a selected payment provider and
 sandbox credentials. There is currently no payment activation flow.
+
+### Admin deep-link acceptance
+
+In the sibling Website checkout, build the usual staging bundle and two extra
+bundles with Vite. Use fresh output directories for the extra bundles.
+
+```sh
+VITE_GO_API_URL=/api VITE_ACCOUNT_API_URL=/api VITE_GO_PHONE_ACCOUNTS=true npm run build
+VITE_GO_API_URL=/api VITE_GO_PHONE_ACCOUNTS=false npm run build -- --outDir /tmp/bakeu-admin-off
+VITE_GO_API_URL='' VITE_GO_PHONE_ACCOUNTS=false npm run build -- --outDir /tmp/bakeu-admin-unconfigured
+```
+
+From the Backend checkout, run the browser suite with the normal disposable
+`TEST_REPLICA_URI` and both `TEST_ADMIN_OFF_DIST=/tmp/bakeu-admin-off` and
+`TEST_ADMIN_UNCONFIGURED_DIST=/tmp/bakeu-admin-unconfigured`. The Admin cases
+use two additional local gateways on ports 3851 and 3852. They do not contact
+Railway, a live Bot or a payment provider.
