@@ -47,6 +47,10 @@ test('phone verification and durable sessions on a MongoDB replica set', async t
     assert.equal(response.status, 200);
     return (await response.json()).code;
   }
+  const expiredProof = await challenge({ ...seller, phone: '+998901234570' });
+  const expiredCode = await code(expiredProof, '+998901234570', '99');
+  await db.collection('phone_proofs').updateOne({ _id: expiredProof }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+  assert.equal((await post('/auth/phone/verify', { id: expiredProof, code: expiredCode })).status, 401);
   const first = await challenge(seller);
   assert.equal(await db.collection('users').countDocuments(), 0);
   assert.equal(await db.collection('markets').countDocuments(), 0);
@@ -193,7 +197,50 @@ test('phone verification and durable sessions on a MongoDB replica set', async t
   assert.deepEqual(await (await post(receiptPath + '/ack', { leaseToken: job.leaseToken, messageId: 123 }, bridge('100'))).json(), { ok: true });
   assert.equal((await (await read('/me/notifications')).json()).items[0].telegramState, 'sent');
 
-  await db.collection('users').updateOne({ _id: signedIn.user.uid }, { $set: { freezeUntil: new Date(Date.now() + 60000) } });
+  const dialog = await post('/chats', { shopId: shop._id }, buying);
+  assert.equal(dialog.status, 201);
+  const chat = await dialog.json();
+  assert.equal((await post('/chats/' + chat.id + '/messages', { text: 'Order question' }, buying)).status, 201);
+  const message = (await (await read('/chats/' + chat.id + '/messages', signed)).json()).items[0];
+  assert.equal(message.text, 'Order question');
+  assert.equal((await (await read('/chats', signed)).json()).items[0].unread, 1);
+  assert.equal((await fetch(base + '/api/chats/' + chat.id + '/read', {
+    method: 'PUT', headers: { ...signed, 'content-type': 'application/json' }, body: JSON.stringify({ through: message.sequence }),
+  })).status, 204);
+  assert.equal((await (await read('/chats', signed)).json()).items[0].unread, 0);
+  assert.equal((await read('/chats/' + chat.id + '/messages', { authorization: 'Bearer ' + legacyJWT })).status, 404);
+  const follow = method => fetch(base + '/api/markets/' + shop._id + '/follow', { method, headers: buying });
+  assert.deepEqual(await (await follow('PUT')).json(), { followers: 1, following: true });
+  assert.deepEqual(await (await follow('PUT')).json(), { followers: 1, following: true });
+  assert.deepEqual(await (await follow('DELETE')).json(), { followers: 0, following: false });
+  const review = () => post('/products/from-first/reviews', { rating: 5, comment: 'Fresh bread' }, buying);
+  assert.equal((await review()).status, 403);
+  await db.collection('orders').updateOne({ _id: order.id }, { $set: { status: 'completed' } });
+  assert.equal((await review()).status, 201);
+  assert.equal((await review()).status, 400);
+  const salesDate = new Date(Date.now() + 5 * 3600000).toISOString().slice(0, 10);
+  const sellerReport = await (await read('/seller/dashboard?period=day', signed)).json();
+  assert.equal(sellerReport.revenue.total, 86.4);
+  assert.equal((await read('/admin/overview')).status, 403);
+  process.env.ADMIN_USER_IDS = buyerSession.user.uid;
+  const overview = await (await read('/admin/overview')).json();
+  assert.equal(overview.customers, 2);
+  assert.equal(overview.sellers, 2);
+  assert.equal(overview.orders, 2);
+  const adminReport = await (await read('/admin/sales?period=day&date=' + salesDate)).json();
+  assert.equal(adminReport.totals.revenue, sellerReport.revenue.total);
+  await db.collection('users').updateOne({ _id: signedIn.user.uid }, { $set: { passwordHash: 'sentinel-hash' } });
+  const adminUser = await (await read('/admin/users/' + signedIn.user.uid)).json();
+  assert.equal(adminUser.passwordHash, undefined);
+  const freeze = await fetch(base + '/api/admin/users/' + signedIn.user.uid + '/status', {
+    method: 'PATCH', headers: { ...buying, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'freeze', freezeUntil: new Date(Date.now() + 60000).toISOString(), secret: 'ignore' }),
+  });
+  assert.equal(freeze.status, 200);
+  const audit = await (await read('/admin/records/audit')).json();
+  assert.equal(audit.total, 1);
+  assert.equal(audit.items[0].kind, 'user.freeze');
+  assert.equal(audit.items[0].data.secret, undefined);
   assert.equal((await me(token)).status, 403);
   const rotatedCookie = restored.headers.get('set-cookie').split(';')[0];
   assert.equal((await post('/auth/refresh', {}, { ...browser, cookie: rotatedCookie })).status, 403);

@@ -1,3 +1,6 @@
+import { Admin } from './admin.js';
+import { Analytics } from './analytics.js';
+import { Community, CommunityController } from './community.js';
 import { Commerce } from './commerce.js';
 import { SellerProducts } from './seller-products.js';
 import { Auth, AuthController } from './auth.js';
@@ -16,7 +19,10 @@ class HealthController {
   @Get('readyz')
   async ready() {
     try {
-      await this.database.db.command({ ping: 1 });
+      const server = await this.database.db.command({ hello: 1 });
+      if (process.env.TELEGRAM_BOT_USERNAME && !(server.isWritablePrimary && (server.setName || server.msg === 'isdbgrid'))) {
+        throw new Error('Transactional MongoDB required');
+      }
     } catch {
       throw new ServiceUnavailableException('MongoDB unavailable');
     }
@@ -24,5 +30,5 @@ class HealthController {
   }
 }
 
-@Module({ controllers: [HealthController, CatalogController, MediaController, AuthController, SellerProducts, Commerce], providers: [Database, Auth] })
+@Module({ controllers: [HealthController, CatalogController, MediaController, AuthController, SellerProducts, Commerce, CommunityController, Analytics, Admin], providers: [Database, Auth, Community] })
 export class AppModule {}

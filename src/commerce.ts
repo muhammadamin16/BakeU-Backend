@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { ObjectId, type ClientSession, type Collection, type Filter } from 'mongodb';
+import { activeStatuses, salesReport } from './analytics.js';
 import { Auth } from './auth.js';
 import { publicProduct, type Product } from './catalog.js';
 import { Database } from './database.js';
@@ -96,7 +97,7 @@ export class Commerce {
 
   private async listing(uid: string, item: Line, session?: ClientSession) {
     const product = await this.db.collection<Product>('products').findOne({
-      _id: item.productId, draft: { $ne: true }, deletedAt: { $exists: false }, available: true,
+      _id: item.productId, moderationStatus: { $ne: 'hidden' }, draft: { $ne: true }, deletedAt: { $exists: false }, available: true,
     }, { session });
     if (!product || product.sellerId === uid) throw invalid();
     const shop = await this.db.collection<Shop>('markets').findOne({ sellerId: product.sellerId, status: 'approved' }, { session });
@@ -183,6 +184,19 @@ export class Commerce {
     if (!server.isWritablePrimary || !(server.setName || server.msg === 'isdbgrid')) throw new ServiceUnavailableException('Transactional checkout is unavailable');
     return { workflowVersion: 2, idempotency: true, history: true, variantSnapshots: true, cartRevision: true, deliveryScheduling: true };
   }
+  @Post('orders/:id/complaints')
+  async complain(@Req() req: Request, @Param('id') orderId: string, @Body() input: Input) {
+    const userId = (await this.actor(req))._id;
+    const subject = input?.subject;
+    if (typeof subject !== 'string' || subject.trim().length < 5 || subject.trim().length > 500) throw new BadRequestException('Invalid complaint');
+    if (!await this.orders.findOne({ _id: orderId, customerId: userId })) throw new NotFoundException('Order not found');
+    const id = hash([orderId, userId]);
+    const result = await this.db.collection<{ _id: string }>('complaints').updateOne({ _id: id },
+      { $setOnInsert: { userId, orderId, subject: subject.trim(), status: 'open', createdAt: new Date() } }, { upsert: true });
+    if (!result.upsertedCount) throw new ConflictException('A complaint already exists for this order');
+    return { id, status: 'open' };
+  }
+
   @Get('orders')
   async history(@Req() req: Request) {
     const uid = (await this.actor(req))._id;
@@ -194,7 +208,7 @@ export class Commerce {
   private async once(uid: string, scope: string, req: Request, body: Input,
     work: (session: ClientSession) => Promise<unknown>) {
     const key = req.headers['idempotency-key'];
-    if (!key || !/^[\w-]{8,128}$/.test(key)) throw new BadRequestException('Idempotency-Key is required');
+    if (!key || !/^[\w:-]{1,128}$/.test(key)) throw new BadRequestException('Idempotency-Key is required');
     const collection: Collection<Mutation> = this.db.collection('order_mutations');
     const action = uid + ':' + scope + ':' + key;
     const fingerprint = hash(body);
@@ -263,13 +277,16 @@ export class Commerce {
 
   @Patch('orders/:id/status')
   async transition(@Req() req: Request, @Param('id') id: string, @Body() body: Input) {
-    const actor = await this.actor(req);
-    return this.once(actor._id, 'status:' + id, req, body, async session => {
-      const order = await this.orders.findOne({ _id: id, sellerId: actor._id }, { session });
+    return this.changeStatus((await this.actor(req))._id, req, id, body);
+  }
+
+  private async changeStatus(actorId: string, req: Request, id: string, body: Input, bot = false) {
+    return this.once(actorId, 'status:' + id, req, body, async session => {
+      const order = await this.orders.findOne({ _id: id, sellerId: actorId }, { session });
       if (!order) throw new NotFoundException('Order not found');
       const target = body.status;
       const displayed = view(order);
-      if (displayed.status !== body.expectedStatus || displayed.version !== body.expectedVersion) throw new ConflictException('Order changed');
+      if (displayed.status !== body.expectedStatus || (!bot && displayed.version !== body.expectedVersion)) throw new ConflictException('Order changed');
       const graph: Record<string, string[]> = {
         pending: ['accepted', 'rejected'], accepted: ['preparing', 'cancelled'], preparing: ['ready', 'cancelled'],
         ready: [order.fulfillment === 'pickup' ? 'completed' : 'delivering', 'cancelled'], delivering: ['delivered'], delivered: ['completed'],
@@ -279,12 +296,100 @@ export class Commerce {
       const version = displayed.version + 1;
       const updated = await this.orders.findOneAndUpdate({ _id: id, status: order.status, version: order.version ?? { $exists: false } },
         { $set: { status: target, version, updatedAt: at, workflowVersion: 2 },
-          $push: { history: { status: target, at, actorId: actor._id, version } } }, { returnDocument: 'after', session });
+          $push: { history: { status: target, at, actorId, version } } }, { returnDocument: 'after', session });
       if (!updated) throw new ConflictException('Order changed');
       await this.notice(updated, updated.customerId, session);
       return view(updated);
     });
   }
+  private async botAccount(req: Request) {
+    const actor = this.auth.bridgeActor(req);
+    const user = await this.auth.telegramUser(actor);
+    if (!user) throw new ForbiddenException('Telegram account is unavailable');
+    return user;
+  }
+  private async botMarket(userId: string) {
+    const market = await this.db.collection<Shop>('markets').findOne({ sellerId: userId, status: 'approved' });
+    if (!market) throw new ForbiddenException('An approved shop is required');
+    return market;
+  }
+
+  @Get('integrations/telegram/me')
+  async telegramIdentity(@Req() req: Request) {
+    const telegramId = this.auth.bridgeActor(req);
+    const user = await this.auth.telegramUser(telegramId);
+    if (!user) return { linked: false };
+    const market = await this.db.collection<Shop>('markets').findOne({ sellerId: user._id, status: 'approved' });
+    return { linked: true, confirmed: true, botStarted: true, telegramId,
+      ...(market && { shopId: market._id }),
+      user: { id: user._id, role: market ? 'SELLER' : 'CLIENT', status: 'active', canBuy: true } };
+  }
+
+  @Get('integrations/telegram/shop')
+  async telegramShop(@Req() req: Request) {
+    const user = await this.botAccount(req);
+    const shop = await this.botMarket(user._id);
+    const [productCount, statuses, stats] = await Promise.all([
+      this.db.collection('products').countDocuments({ sellerId: user._id, deletedAt: { $exists: false }, draft: { $ne: true } }),
+      this.orders.aggregate([{ $match: { sellerId: user._id, shopId: shop._id } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(),
+      salesReport(this.database, 'year', undefined, { sellerId: user._id }),
+    ]);
+    const counts = Object.fromEntries(statuses.map(row => [row._id, row.count]));
+    counts.delivering = (counts.delivering ?? 0) + (counts.out_for_delivery ?? 0);
+    return { id: shop._id, ownerId: user._id, name: shop.name, phone: user.phone, address: shop.address ?? '',
+      productCount, counts, revenue: stats.totals.revenue };
+  }
+
+  @Get('integrations/telegram/shop/products')
+  async telegramProducts(@Req() req: Request) {
+    const user = await this.botAccount(req);
+    const shop = await this.botMarket(user._id);
+    const products = await this.db.collection<Product>('products').find({
+      sellerId: user._id, deletedAt: { $exists: false }, draft: { $ne: true }, moderationStatus: { $ne: 'hidden' },
+    }).limit(100).toArray();
+    return { ownerId: user._id, shopId: shop._id,
+      items: products.map(({ _id: id, title, price }) => ({ id, title, price })) };
+  }
+
+  @Get('integrations/telegram/orders')
+  async telegramOrders(@Req() req: Request, @Query() query: Input) {
+    const user = await this.botAccount(req);
+    const { audience, view: mode = 'all', page = '0', limit = '5' } = query;
+    if ((audience !== 'buyer' && audience !== 'seller') || typeof mode !== 'string' ||
+        typeof page !== 'string' || !/^\d{1,4}$/.test(page) ||
+        typeof limit !== 'string' || !/^[1-5]$/.test(limit)) throw invalid();
+    const filter: Filter<Order> = audience === 'seller' ?
+      { sellerId: user._id, shopId: (await this.botMarket(user._id))._id } : { customerId: user._id };
+    if (mode === 'active') filter.status = { $in: activeStatuses };
+    else if (mode === 'history') filter.status = { $nin: activeStatuses };
+    else if (mode !== 'all') {
+      if (![...activeStatuses, 'completed', 'rejected', 'cancelled', 'delivered'].includes(mode)) throw invalid();
+      filter.status = mode === 'delivering' ? { $in: ['delivering', 'out_for_delivery'] } : mode;
+    }
+    const size = Number(limit);
+    const rows = await this.orders.find(filter).sort({ createdAt: -1, _id: -1 }).skip(Number(page) * size).limit(size + 1).toArray();
+    return { orders: rows.slice(0, size).map(view), nextPage: rows.length > size ? Number(page) + 1 : null };
+  }
+
+  @Get('integrations/telegram/orders/:id')
+  async telegramOrder(@Req() req: Request, @Param('id') id: string) {
+    const user = await this.botAccount(req);
+    const order = await this.orders.findOne({ _id: id, $or: [{ customerId: user._id }, { sellerId: user._id }] });
+    if (!order || (order.customerId !== user._id && (await this.botMarket(user._id))._id !== order.shopId)) {
+      throw new NotFoundException('Order not found');
+    }
+    return view(order);
+  }
+
+  @Patch('integrations/telegram/orders/:id/status')
+  async telegramStatus(@Req() req: Request, @Param('id') id: string, @Body() body: Input) {
+    const user = await this.botAccount(req);
+    const shop = await this.botMarket(user._id);
+    if (!await this.orders.findOne({ _id: id, shopId: shop._id, sellerId: user._id })) throw new NotFoundException('Order not found');
+    return this.changeStatus(user._id, req, id, body, true);
+  }
+
   private async recipient(userId: string, order: Job['order']) {
     const binding = await this.db.collection<{ _id: string }>('telegram_bindings').findOne({
       userId, blocked: { $ne: true }, botStarted: true, confirmedAt: { $exists: true },
@@ -376,6 +481,14 @@ export class Commerce {
     return { ok: true };
   }
 
+  @Put('me/notifications/:id/read')
+  @HttpCode(204)
+  async readNotification(@Req() req: Request, @Param('id') id: string) {
+    const userId = (await this.actor(req))._id;
+    if (!/^[a-f0-9]{24}$/.test(id)) throw invalid();
+    const result = await this.db.collection('notifications').updateOne({ _id: new ObjectId(id), userId }, { $set: { read: true } });
+    if (!result.matchedCount) throw new NotFoundException('Notification not found');
+  }
   @Get('me/notifications')
   async notifications(@Req() req: Request) {
     const userId = (await this.actor(req))._id;

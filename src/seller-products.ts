@@ -1,11 +1,12 @@
 import {
   BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, Headers,
-  Header, HttpCode, StreamableFile, NotFoundException, Param, Post, Put, UploadedFiles, UseInterceptors,
+  Header, HttpCode, StreamableFile, NotFoundException, Param, Patch, Post, Put, UploadedFiles, UseInterceptors,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { GridFSBucket, ObjectId, type Filter, type UpdateFilter } from 'mongodb';
 import sharp from 'sharp';
-import { Auth } from './auth.js';
+import { Auth, isAdminAccount } from './auth.js';
 import { publicProduct, type Product } from './catalog.js';
 import { Database } from './database.js';
 
@@ -99,20 +100,66 @@ export class SellerProducts {
       lat: latitude, lng: longitude, fulfillment, logoURL, status, rejectionReason };
   }
 
+  @Patch('market/mine')
+  async editMarket(@Headers('authorization') token: string | undefined, @Body() input: Input) {
+    const sellerId = await this.seller(token);
+    const markets = this.database.db.collection<{ _id: string; sellerId: string; status: string; updatedAt?: Date; latitude?: number; longitude?: number; address?: string }>('markets');
+    const shop = await markets.findOne({ sellerId, status: 'approved' });
+    if (!shop) throw new NotFoundException('Market not found');
+    const changes = Object.fromEntries(['name', 'description', 'city', 'area', 'address']
+      .filter(field => input?.[field] !== undefined)
+      .map(field => [field, text(input[field], field === 'description' ? 4000 : 500)]));
+    if (changes.name === '' || changes.address === '') throw new BadRequestException('Name and address cannot be empty');
+    if (input?.fulfillment !== undefined) {
+      if (typeof input.fulfillment !== 'string' || !['pickup', 'delivery', 'both'].includes(input.fulfillment)) throw new BadRequestException('Invalid fulfillment');
+      changes.fulfillment = input.fulfillment;
+    }
+    const { lat, lng } = input ?? {};
+    const changedAddress = changes.address !== undefined && changes.address !== shop.address;
+    if (changedAddress && input.pointConfirmed !== true) throw new BadRequestException('Confirm the shop location after changing its address');
+    let location = {};
+    if (lat !== undefined || lng !== undefined || changedAddress) {
+      if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng) ||
+        Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new BadRequestException('Both coordinates are required');
+      location = { latitude: lat, longitude: lng };
+    }
+    const updated = await markets.updateOne({
+      _id: shop._id, status: 'approved', updatedAt: shop.updatedAt ?? { $exists: false },
+    }, { $set: { ...changes, ...location, updatedAt: new Date() } });
+    if (!updated.matchedCount) throw new ConflictException('Market changed');
+    return this.market(token);
+  }
+
   @Get('me/products/:id/images/:imageId')
   @Header('Cache-Control', 'no-store')
   @Header('X-Content-Type-Options', 'nosniff')
   async preview(@Headers('authorization') token: string | undefined, @Param('id') productId: string,
     @Param('imageId') imageId: string) {
-    const product = await this.owned(productId, await this.seller(token));
-    if (!/^[a-f0-9]{24}$/.test(imageId) || !product.imageURLs?.includes('/api/images/' + imageId)) {
+    return this.previewImage(await this.owned(productId, await this.seller(token)), imageId);
+  }
+
+  @Get('admin/products/:id/images/:imageId')
+  @Header('Cache-Control', 'no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
+  async adminPreview(@Headers('authorization') token: string | undefined, @Param('id') productId: string,
+    @Param('imageId') imageId: string) {
+    if (!isAdminAccount(await this.auth.current(token))) throw new ForbiddenException('Administrator access required');
+    const product = await this.products.findOne({ _id: productId });
+    if (!product) throw new NotFoundException('Product not found');
+    return this.previewImage(product, imageId);
+  }
+
+  private async previewImage(product: Product, imageId: string) {
+    if (!/^[a-f0-9]{24}$/i.test(imageId) || !product.imageURLs?.includes('/api/images/' + imageId)) {
       throw new NotFoundException('Image not found');
     }
     const bucket = new GridFSBucket(this.database.db);
     const objectId = new ObjectId(imageId);
-    const file = await bucket.find({ _id: objectId, 'metadata.productId': productId, 'metadata.visibility': 'product' }).next();
+    const file = await bucket.find({ _id: objectId }).next();
     if (!file) throw new NotFoundException('Image not found');
-    return new StreamableFile(bucket.openDownloadStream(objectId), { type: 'image/webp', length: file.length });
+    const mime = file.metadata?.contentType;
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mime)) throw new NotFoundException('Image not found');
+    return new StreamableFile(bucket.openDownloadStream(objectId), { type: mime, length: file.length });
   }
 
   @Get('me/products')
@@ -187,17 +234,18 @@ export class SellerProducts {
         throw new BadRequestException('Use a valid JPEG, PNG or WebP photo');
       }
     }));
-    if (images.some((image, index) => images.slice(0, index).some(previous => previous.equals(image)))) {
-      throw new BadRequestException('Choose different photos');
-    }
-
+    const digests = images.map(image => createHash('sha256').update(image).digest('hex'));
     const bucket = new GridFSBucket(this.database.db);
+    const keptIds = oldImages.filter(url => url !== replace && /^\/api\/images\/[a-f0-9]{24}$/i.test(url))
+      .map(url => new ObjectId(url.slice(-24)));
+    const duplicate = await bucket.find({ _id: { $in: keptIds }, 'metadata.digest': { $in: digests } }).next();
+    if (duplicate || new Set(digests).size !== digests.length) throw new BadRequestException('Choose different photos');
     const ids: ObjectId[] = [];
     let attaching = false;
     try {
-      for (const photo of images) {
+      for (const [index, photo] of images.entries()) {
         const stream = bucket.openUploadStream('product.webp', { metadata: {
-          contentType: 'image/webp', visibility: 'product', productId,
+          contentType: 'image/webp', visibility: 'product', productId, digest: digests[index],
         } });
         ids.push(stream.id);
         await new Promise<void>((resolve, reject) => stream.once('finish', resolve).once('error', reject).end(photo));

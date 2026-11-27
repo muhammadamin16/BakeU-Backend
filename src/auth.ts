@@ -51,9 +51,13 @@ function coordinate(value: unknown, bound: number) {
   if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > bound) throw new BadRequestException('Invalid shop coordinates');
   return value;
 }
+export function isAdminAccount(user: User) {
+  return !!user.verifiedPhoneE164 && !!user.phoneVerifiedAt &&
+    (process.env.ADMIN_USER_IDS ?? '').split(',').map(id => id.trim()).includes(user._id);
+}
 export function publicUser(user: User) {
   const { _id: uid, role, name, phone, firstName, lastName, verifiedPhoneE164, phoneVerifiedAt, address, createdAt } = user;
-  return { uid, role, name, phone, firstName, lastName, verifiedPhoneE164, phoneVerifiedAt, address, createdAt };
+  return { uid, role, name, phone, firstName, lastName, verifiedPhoneE164, phoneVerifiedAt, address, createdAt, capabilities: { admin: isAdminAccount(user) } };
 }
 
 @Injectable()
@@ -229,11 +233,17 @@ export class Auth implements OnModuleInit {
       throw error;
     }
   }
-  async launch(actor: string) {
-    const binding = await this.db.collection<{ _id: string; userId: string; blocked?: boolean }>('telegram_bindings').findOne({ _id: actor, blocked: { $ne: true } });
+  async telegramUser(actor: string) {
+    const binding = await this.db.collection<{ _id: string; userId: string }>('telegram_bindings').findOne({
+      _id: actor, blocked: { $ne: true }, botStarted: true, confirmedAt: { $exists: true },
+    });
     const user = binding && await this.users.findOne({ _id: binding.userId });
-    if (!active(user) || !user.phoneVerifiedAt) return { linked: false };
-    const ticket = randomBytes(24).toString('hex');
+    return active(user) && user.phoneVerifiedAt && user.verifiedPhoneE164 ? user : null;
+  }
+  async launch(actor: string) {
+    const user = await this.telegramUser(actor);
+    if (!user) return { linked: false };
+    const ticket = randomBytes(32).toString('hex');
     await this.db.collection<Ticket>('telegram_launch_tickets').insertOne({
       _id: digest(ticket), userId: user._id, expiresAt: new Date(Date.now() + 60000),
     });
@@ -241,7 +251,7 @@ export class Auth implements OnModuleInit {
   }
   async exchange(input: Input) {
     const value = input?.ticket;
-    if (typeof value !== 'string' || !tokenPattern.test(value)) throw invalid();
+    if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) throw invalid();
     return this.database.transaction(async (session) => {
       const ticket = await this.db.collection<Ticket>('telegram_launch_tickets').findOneAndDelete({
         _id: digest(value), expiresAt: { $gt: new Date() },
@@ -252,6 +262,17 @@ export class Auth implements OnModuleInit {
       return this.newFamily(user, session);
     });
   }
+  async editProfile(authorization: string | undefined, input: Input) {
+    const user = await this.current(authorization);
+    const name = required(input?.name, 160);
+    const phone = required(input?.phone, 40);
+    if (typeof input?.address !== 'string' || input.address.trim().length > 500) throw new BadRequestException('Invalid address');
+    const updated = await this.users.findOneAndUpdate({ _id: user._id },
+      { $set: { name, phone, address: input.address.trim() } }, { returnDocument: 'after' });
+    if (!active(updated)) throw new ForbiddenException('Account is unavailable');
+    return publicUser(updated);
+  }
+
   async rotate(refresh: string) {
     if (!/^[a-f0-9]{24}\.[a-f0-9]{64}$/i.test(refresh)) throw invalid();
     const sid = refresh.slice(0, 24);
@@ -350,6 +371,10 @@ export class AuthController {
     await this.auth.revoke(this.refreshToken(req, mode, input));
     if (mode === 'browser') res.setHeader('Set-Cookie', `${cookie}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict`);
   }
+
+  @Post('profile')
+  @HttpCode(200)
+  profile(@Headers('authorization') token: string | undefined, @Body() input: Input) { return this.auth.editProfile(token, input); }
 
   @Get('me')
   async me(@Headers('authorization') token: string | undefined) { return publicUser(await this.auth.current(token)); }

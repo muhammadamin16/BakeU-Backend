@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { Community } from './community.js';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.js';
@@ -9,6 +10,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const spec = new DocumentBuilder().setTitle('BakeU Marketplace').setVersion('0.1').build();
   SwaggerModule.setup('openapi', app, () => SwaggerModule.createDocument(app, spec));
+  app.get(Community).attach(app.getHttpServer());
   await app.listen(Number(process.env.PORT ?? 3000), '0.0.0.0');
 }
 

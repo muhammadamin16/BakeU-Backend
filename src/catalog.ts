@@ -71,7 +71,7 @@ export function publicProduct(doc: Product) {
     ratingAvg, ratingCount, unit, weight, portions, ingredients, allergens, createdAt, updatedAt };
 }
 
-const activeProduct = { deletedAt: { $exists: false }, draft: { $ne: true } };
+const activeProduct = { moderationStatus: { $ne: "hidden" }, deletedAt: { $exists: false }, draft: { $ne: true } };
 
 @Controller()
 export class CatalogController {
