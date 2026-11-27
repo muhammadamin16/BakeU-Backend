@@ -11,7 +11,7 @@ async function bootstrap() {
   const spec = new DocumentBuilder().setTitle('BakeU Marketplace').setVersion('0.1').build();
   SwaggerModule.setup('openapi', app, () => SwaggerModule.createDocument(app, spec));
   app.get(Community).attach(app.getHttpServer());
-  await app.listen(Number(process.env.PORT ?? 3000), '0.0.0.0');
+  await app.listen(Number(process.env.PORT ?? 3000), process.env.BAKEU_BIND_LOOPBACK === 'true' ? '127.0.0.1' : '0.0.0.0');
 }
 
 void bootstrap().catch(() => {
